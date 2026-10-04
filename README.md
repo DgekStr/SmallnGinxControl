@@ -2,7 +2,7 @@
 
 Русскоязычная self-hosted панель для управления одним или несколькими nginx-серверами. Django/Waitress обслуживают интерфейс и API; локальные и удалённые серверы управляются через nginx CLI или проверенный SSH. Статика, шрифты и графики поставляются локально, Docker и Node.js на production-сервере не нужны.
 
-**Актуальный релиз: v1.0.1.** Русский интерфейс, светлая и тёмная темы, адаптивная навигация. В релиз входят управление vhost/reverse proxy, per-host logging и retention, TOP-5 трафика, конфигурациями, журналами и профилями SSH.
+**Последний versioned-релиз: v1.0.1.** Ветка `main` содержит последующие изменения без перемещения тега и смены версии. Русский интерфейс, светлая и тёмная темы, адаптивная навигация, управление vhost/reverse proxy, per-host logging и retention, TOP-5 трафика, конфигурациями, журналами и профилями SSH.
 
 ![Обзор сервера](doc/images/overview.png)
 
@@ -15,7 +15,7 @@
 ```powershell
 git clone https://github.com/DgekStr/SmallnGinxControl.git
 Set-Location SmallnGinxControl
-git checkout v1.0.1
+git checkout main
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe bootstrap.py
@@ -57,6 +57,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 - Срок хранения host logs задаётся в Настройках; ежедневный systemd timer ротирует и очищает только `*-data.log`.
 - Хосты и reverse proxy, поиск домена/пути/upstream, фильтры состояния.
 - Добавление HTTP-сайта или HTTP(S)-upstream, отдельные журналы.
+- При создании host или reverse proxy можно явно запросить выпуск Let's Encrypt сертификата через Certbot; таблица HTTPS-хостов показывает целое число дней до окончания сертификата.
 - Включение/отключение стандартных sites-available/sites-enabled и conf.d/*.conf; reverse proxy при отключении переходит в режим обслуживания с `maitenance.html`.
 - Редактор исходных конфигураций, сложных location/upstream/TLS и nginx.conf без перегенерации существующих файлов.
 - Crossplane, настоящий `nginx -t` в рабочем режиме, reload и отдельный подтверждаемый restart.
@@ -89,7 +90,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 
 При отключении стандартного reverse proxy панель сохраняет исходный файл вне nginx root в защищённом state-каталоге и оставляет vhost активным. UI показывает состояние «Обслуживание». Запросы получают `503` с содержимым `/var/www/html/maitenance.html`. При включении исходный файл восстанавливается байт-в-байт. Обычные статические хосты сохраняют полное отключение. Если reverse proxy уже включает `maintenance_all.conf`, используется его error handler; иначе добавляется внутренний обработчик страницы обслуживания. Нестандартные include требуют ручного редактирования.
 
-Существующая TLS-конфигурация сохраняется. Форма создаёт HTTP-хост; Let's Encrypt и отдельный мастер сертификатов не реализованы. SSL задаётся в редакторе с существующими сертификатами. HTTPS-бейдж означает listen ssl, не проверку срока сертификата.
+Существующая TLS-конфигурация сохраняется. Выпуск сертификата доступен только при создании нового хоста с отмеченным «Выпустить SSL»: требуются публичное DNS-имя, корректный email владельца, открытый извне порт 80, доступный Certbot и DNS, указывающий на nginx. Поддерживается HTTP-01 webroot; выпуск в demo заблокирован, wildcard/IP/localhost не принимаются. Новый host сначала обслуживает ACME challenge по HTTP, затем переключается на HTTP→HTTPS redirect и TLS. Для автоматического Certbot renewal сохраняется webroot-конфигурация и deploy-hook `systemctl reload nginx`. HTTPS-таблица показывает оставшиеся дни, предупреждает при 14 днях и менее и явно отмечает просрочку. Для HTTP-хостов поле срока не выводится. HTTPS-бейдж сам по себе означает listen ssl.
 
 Журналы читаются из `SNC_LOG_ROOT` и перечисленных в `SNC_LOG_EXTRA_ROOTS` дополнительных корней; по умолчанию добавлен `/var/http`. Каждая директива access_log/error_log проверяется по real path, максимум 128 КБ на файл за запрос. Syslog, динамические имена и пути вне разрешённых roots не читаются. При наследуемом журнале нужно выбрать общий журнал.
 
@@ -114,7 +115,7 @@ npm run test:e2e
 
 В Windows тесты используют установленный Google Chrome; браузер можно выбрать через SNC_TEST_BROWSER. В Linux предварительно выполнить `npx playwright install chromium`. Тесты запускаются в отдельной локальной демосреде; рабочее демо не меняют. Готовые ресурсы находятся в static/vendor, Node.js нужен только для их обновления и тестов. Изображение static/brand.png взято из предоставленного проекта CRM/focuslens-site/assets/logo_dark_tile.png. Лицензии библиотек сохранены рядом с ресурсами.
 
-Проверки v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention и TOP-5 sampled traffic. Подробности и ограничения: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
+Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая `main`: **65 backend-тестов и 8 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention и TOP-5 sampled traffic. Подробности и ограничения: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
 
 
 ## Документы

@@ -73,7 +73,16 @@ class SSHManager:
                 timeout=6, banner_timeout=6, auth_timeout=8,
             )
             stdin, stdout, stderr = client.exec_command(worker_command(), timeout=90)
-            stdin.write(json.dumps({'root': self.server.nginx_root, 'log_root': self.server.log_root, 'log_roots': [str(path) for path in settings.SNC_LOG_EXTRA_ROOTS], 'operation': operation, 'data': data or {}}, ensure_ascii=True))
+            stdin.write(json.dumps({
+                'root': self.server.nginx_root,
+                'log_root': self.server.log_root,
+                'log_roots': [str(path) for path in settings.SNC_LOG_EXTRA_ROOTS],
+                'certbot_bin': settings.SNC_CERTBOT_BIN,
+                'acme_webroot': str(settings.SNC_ACME_WEBROOT),
+                'certbot_live_root': str(settings.SNC_CERTBOT_LIVE_ROOT),
+                'operation': operation,
+                'data': data or {},
+            }, ensure_ascii=True))
             stdin.flush()
             stdin.channel.shutdown_write()
             output = stdout.read(6 * 1024 * 1024 + 1)
@@ -106,7 +115,7 @@ class SSHManager:
         for config in result['configs']:
             try:
                 nodes = self.parser.syntax(config['content'])
-                item = describe_configuration(nodes, config['id'], config['revision'], config['enabled'], config['toggleable'], config.get('maintenance', False))
+                item = describe_configuration(nodes, config['id'], config['revision'], config['enabled'], config['toggleable'], config.get('maintenance', False), config.get('certificate_days'))
                 if item:
                     items.append(item)
             except OperationError as error:
@@ -123,10 +132,22 @@ class SSHManager:
         return self.rpc('save', {'id': identifier, 'content': content, 'revision': expected_revision})
 
     def create(self, data):
-        name, filename, content = self.parser.render_site(data, log_root=self.server.log_root)
+        issue_ssl = data.get('issue_ssl', False)
+        if type(issue_ssl) is not bool:
+            raise OperationError('Признак выпуска SSL должен быть boolean.')
+        name, filename, content = self.parser.render_site(data, log_root=self.server.log_root, challenge=issue_ssl)
         if any(name in item['domains'] for item in self.inventory()['items']):
             raise OperationError('Такой домен уже есть в конфигурации сервера.')
-        return self.rpc('create', {'id': 'conf.d/' + filename, 'content': content})
+        payload = {'id': 'conf.d/' + filename, 'content': content}
+        if issue_ssl:
+            _, _, https_content = self.parser.render_site(data, log_root=self.server.log_root, https=True)
+            payload.update({
+                'issue_ssl': True,
+                'ssl_domain': name,
+                'ssl_email': data.get('ssl_email'),
+                'https_content': https_content,
+            })
+        return self.rpc('create', payload)
 
     def toggle(self, identifier, enabled, expected_revision):
         return self.rpc('toggle', {'id': identifier, 'enabled': enabled, 'revision': expected_revision})

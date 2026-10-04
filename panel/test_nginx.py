@@ -45,6 +45,41 @@ class NginxTests(SimpleTestCase):
         self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
         self.assertFalse(self.manager.maintenance_backup(item['id']).exists())
 
+    def test_ssl_site_renders_http_challenge_redirect_and_tls_server(self):
+        data = {'name': 'secure.example.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80, 'ssl_email': 'ops@example.test'}
+        _, _, challenge = self.manager.render_site(data, challenge=True)
+        _, _, https = self.manager.render_site(data, https=True)
+        self.assertIn('/.well-known/acme-challenge/', challenge)
+        self.assertNotIn('return 301 https://', challenge)
+        self.assertIn('return 301 https://$host$request_uri;', https)
+        self.assertIn('listen 443 ssl;', https)
+        self.assertIn('/etc/letsencrypt/live/secure.example.test/fullchain.pem', https)
+        self.assertIn('proxy_pass http://127.0.0.1:3000;', https)
+
+    def test_demo_cannot_request_real_ssl_certificate(self):
+        data = {'name': 'secure.example.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80, 'issue_ssl': True, 'ssl_email': 'ops@example.test'}
+        with self.assertRaisesRegex(OperationError, 'рабочем nginx'):
+            self.manager.create(data)
+
+    def test_ssl_create_switches_http_host_to_tls_after_certbot(self):
+        self.manager.demo = False
+        data = {'name': 'issued.example.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80, 'issue_ssl': True, 'ssl_email': 'ops@example.test'}
+        with patch.object(self.manager, 'validate', return_value='ok'), patch.object(self.manager, 'reload'), patch('panel.nginx.issue_webroot_certificate') as issue:
+            result = self.manager.create(data)
+        self.assertIn('SSL сертификат выпущен', result)
+        issue.assert_called_once()
+        config = self.manager.read('conf.d/issued.example.test.conf')['content']
+        self.assertIn('listen 443 ssl;', config)
+        self.assertIn('return 301 https://$host$request_uri;', config)
+
+    def test_ssl_create_removes_temporary_http_host_if_certbot_fails(self):
+        self.manager.demo = False
+        data = {'name': 'failed.example.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80, 'issue_ssl': True, 'ssl_email': 'ops@example.test'}
+        with patch.object(self.manager, 'validate', return_value='ok'), patch.object(self.manager, 'reload'), patch('panel.nginx.issue_webroot_certificate', side_effect=OperationError('DNS validation failed')):
+            with self.assertRaisesRegex(OperationError, 'временный HTTP-хост удалён'):
+                self.manager.create(data)
+        self.assertFalse((self.manager.root / 'conf.d/failed.example.test.conf').exists())
+
     def test_static_host_uses_legacy_disable(self):
         self.manager.create({'name': 'static.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80})
         item = self.manager.inventory()['items'][0]

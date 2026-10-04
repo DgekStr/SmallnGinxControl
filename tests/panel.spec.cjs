@@ -52,6 +52,7 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   await page.locator('[data-view="proxies"]').click();
   await page.locator('#add-host').click();
   await page.locator('#host-form [name="name"]').fill('e2e.internal');
+  await expect(page.locator('#host-ssl-issue')).toBeDisabled();
   await page.locator('#new-host-target').fill('http://127.0.0.1:3100');
   await page.getByRole('button', {name: 'Создать и включить'}).click();
   await expect(page.locator('#host-dialog')).not.toBeVisible();
@@ -92,6 +93,27 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   await expect(page.locator('#confirm-description')).toContainText('Резервная копия');
   await page.locator('#confirm-accept').click();
   await expect(row).toHaveCount(0);
+});
+
+test('certificate expiry is shown only for HTTPS hosts', async ({page}) => {
+  await login(page);
+  await page.locator('[data-view="hosts"]').click();
+  const markup = await page.evaluate(() => hostTable([
+    {id: 'conf.d/soon.example.com.conf', name: 'soon.example.com', domains: ['soon.example.com'], kind: 'host', target: '/var/www/soon', tls: true, certificate_days: 12, enabled: true, toggleable: true, servers: 1},
+    {id: 'conf.d/expired.example.com.conf', name: 'expired.example.com', domains: ['expired.example.com'], kind: 'host', target: '/var/www/expired', tls: true, certificate_days: -3, enabled: true, toggleable: true, servers: 1},
+    {id: 'conf.d/http.example.com.conf', name: 'http.example.com', domains: ['http.example.com'], kind: 'host', target: '/var/www/http', tls: false, certificate_days: 2, enabled: true, toggleable: true, servers: 1},
+  ]));
+  await page.locator('#hosts-table').evaluate((element, html) => {
+    element.innerHTML = html;
+  }, markup);
+  const soon = page.locator('#hosts-table tbody tr').filter({hasText: 'soon.example.com'});
+  const expired = page.locator('#hosts-table tbody tr').filter({hasText: 'expired.example.com'});
+  const http = page.locator('#hosts-table tbody tr').filter({hasText: 'http.example.com'});
+  await expect(soon.locator('.certificate-expiry')).toHaveText('12 дн.');
+  await expect(soon.locator('.certificate-expiry')).toHaveClass(/warning/);
+  await expect(expired.locator('.certificate-expiry')).toHaveText('Просрочен 3 дн.');
+  await expect(expired.locator('.certificate-expiry')).toHaveClass(/expired/);
+  await expect(http.locator('.certificate-expiry')).toHaveCount(0);
 });
 
 test('main config, reload confirmation and audit', async ({page}) => {

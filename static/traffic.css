@@ -1,2 +1,4 @@
 .traffic-rank-fill.rank-5{background:var(--red)}
 .log-retention-section{border-left:0!important;border-top:1px solid var(--border);padding:25px 0 0}
+.ssl-create-options{border-top:1px solid var(--border);padding-top:14px;margin-top:18px}.ssl-create-options .check-label{font-size:11px}.ssl-create-options>p{margin:7px 0 12px 22px}.ssl-create-options>label:not(.check-label){font-size:10px;margin-top:8px}
+.protocol-cell{display:grid;justify-items:start;gap:5px}.certificate-expiry{font-size:10px;color:var(--muted);white-space:nowrap}.certificate-expiry.warning{color:var(--amber)}.certificate-expiry.expired{color:var(--red)}

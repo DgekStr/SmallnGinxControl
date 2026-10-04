@@ -4,7 +4,7 @@ import re
 import subprocess
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 import crossplane
@@ -13,7 +13,9 @@ from django.conf import settings
 
 from .transactions import (
     OperationError, access_log_traffic_bytes, apply_transaction, atomic_write,
-    configure_host_access_logs, delete_config_transaction, has_proxy_server, is_allowed_log_path,
+    certificate_days_remaining, configure_host_access_logs, delete_config_transaction,
+    issue_webroot_certificate, validate_certificate_request,
+    has_proxy_server, is_allowed_log_path,
     is_maintenance_config, maintenance_backup_path, render_maintenance_config,
 )
 
@@ -35,7 +37,7 @@ def revision(content):
     return hashlib.sha256(content).hexdigest()
 
 
-def describe_configuration(nodes, identifier, content_revision, enabled, toggleable, maintenance=False):
+def describe_configuration(nodes, identifier, content_revision, enabled, toggleable, maintenance=False, certificate_days=None):
     directives = list(walk(nodes))
     servers = sum(node['directive'] == 'server' and 'block' in node for node in directives)
     if not servers:
@@ -50,7 +52,7 @@ def describe_configuration(nodes, identifier, content_revision, enabled, togglea
         'target': ', '.join(dict.fromkeys(upstreams or roots)) or 'Конфигурация сервера',
         'listen': ', '.join(dict.fromkeys(listens)) or '80',
         'tls': any('ssl' in node['args'] for node in directives if node['directive'] == 'listen'),
-        'enabled': enabled, 'maintenance': maintenance, 'servers': servers, 'toggleable': toggleable, 'revision': content_revision,
+        'enabled': enabled, 'maintenance': maintenance, 'certificate_days': certificate_days, 'servers': servers, 'toggleable': toggleable, 'revision': content_revision,
     }
 
 
@@ -97,9 +99,9 @@ class NginxManager:
         finally:
             os.unlink(temporary)
 
-    def command(self, arguments):
+    def command(self, arguments, timeout=20):
         try:
-            result = subprocess.run(arguments, capture_output=True, text=True, timeout=20, check=False)
+            result = subprocess.run(arguments, capture_output=True, text=True, timeout=timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise OperationError(str(error)) from error
         output = (result.stdout + result.stderr).strip()
@@ -183,7 +185,9 @@ class NginxManager:
                     enabled = path in active_files
                 if maintenance:
                     enabled = False
-                item = describe_configuration(nodes, identifier, revision(content), enabled, standard_site or standard_conf, maintenance)
+                certificates = [node['args'][0] for node in walk(nodes) if node['directive'] == 'ssl_certificate' and node['args']]
+                certificate_days = certificate_days_remaining(certificates) if any('ssl' in node['args'] for node in walk(nodes) if node['directive'] == 'listen') else None
+                item = describe_configuration(nodes, identifier, revision(content), enabled, standard_site or standard_conf, maintenance, certificate_days)
                 if item:
                     items.append(item)
             except (OperationError, OSError, UnicodeError) as error:
@@ -366,7 +370,7 @@ class NginxManager:
             apply_transaction(change, rollback, self.validate, self.reload)
             return summary
 
-    def render_site(self, data, log_root=None):
+    def render_site(self, data, log_root=None, *, challenge=False, https=False):
         name = data.get('name', '').strip().lower()
         if len(name) > 190 or not re.fullmatch(r'(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', name):
             raise OperationError('Введите корректное доменное имя (IDN в punycode).')
@@ -376,6 +380,10 @@ class NginxManager:
             raise OperationError('Некорректный порт.')
         if not 1 <= port <= 65535:
             raise OperationError('Порт должен быть от 1 до 65535.')
+        if https:
+            validate_certificate_request(name, data.get('ssl_email'))
+            if port != 80:
+                raise OperationError('Для HTTP-01 SSL challenge у нового хоста должен быть порт 80.')
         kind, target = data.get('kind'), data.get('target', '').strip()
         if kind == 'proxy':
             parsed = urlsplit(target)
@@ -395,12 +403,49 @@ class NginxManager:
         filename = name.replace('*', 'wildcard') + '.conf'
         log_root = self.logs_root.as_posix() if log_root is None else log_root.rstrip('/')
         log_name = name.replace('*', 'wildcard')
-        content = f'server {{\n    listen {port};\n    server_name {name};\n    access_log {log_root}/{log_name}-data.log;\n    error_log {log_root}/{filename}.error.log warn;\n\n    location / {{\n        {location}\n    }}\n}}\n'
+        access_log = f'{log_root}/{log_name}-data.log'
+        error_log = f'{log_root}/{filename}.error.log'
+        acme_root = PurePosixPath(str(settings.SNC_ACME_WEBROOT).replace('\\', '/'))
+        if not acme_root.is_absolute() or '..' in acme_root.parts or not re.fullmatch(r'/[a-zA-Z0-9_./-]+', acme_root.as_posix()):
+            raise OperationError('Некорректный ACME webroot path.')
+        challenge_location = f'    location ^~ /.well-known/acme-challenge/ {{\n        root {acme_root.as_posix()};\n        try_files $uri =404;\n    }}\n'
+        if https:
+            cert_root = PurePosixPath(str(settings.SNC_CERTBOT_LIVE_ROOT).replace('\\', '/'))
+            if not cert_root.is_absolute() or '..' in cert_root.parts or not re.fullmatch(r'/[a-zA-Z0-9_./-]+', cert_root.as_posix()):
+                raise OperationError('Некорректный каталог live-сертификатов.')
+            cert_dir = cert_root / name
+            http_block = (
+                f'server {{\n    listen 80;\n    listen [::]:80;\n    server_name {name};\n'
+                f'    access_log {access_log};\n    error_log {error_log} warn;\n\n'
+                f'{challenge_location}\n'
+                '    location / {\n        return 301 https://$host$request_uri;\n    }\n}\n'
+            )
+            https_block = (
+                f'\nserver {{\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    server_name {name};\n'
+                f'    ssl_certificate {cert_dir}/fullchain.pem;\n'
+                f'    ssl_certificate_key {cert_dir}/privkey.pem;\n'
+                '    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_session_tickets off;\n'
+                f'    access_log {access_log};\n    error_log {error_log} warn;\n\n'
+                f'    location / {{\n        {location}\n    }}\n}}\n'
+            )
+            content = http_block + https_block
+        else:
+            challenge_block = challenge_location + '\n' if challenge else ''
+            content = f'server {{\n    listen {port};\n    server_name {name};\n    access_log {access_log};\n    error_log {error_log} warn;\n\n{challenge_block}    location / {{\n        {location}\n    }}\n}}\n'
         self.syntax(content)
         return name, filename, content
 
     def create(self, data):
-        name, filename, content = self.render_site(data)
+        issue_ssl = data.get('issue_ssl', False)
+        if type(issue_ssl) is not bool:
+            raise OperationError('Признак выпуска SSL должен быть boolean.')
+        if issue_ssl and self.demo:
+            raise OperationError('Выпуск SSL доступен только на рабочем nginx-сервере.')
+        if issue_ssl:
+            name, filename, content = self.render_site(data, challenge=True)
+            _, _, https_content = self.render_site(data, https=True)
+        else:
+            name, filename, content = self.render_site(data)
         with self.lock():
             path = self.path('conf.d/' + filename)
             if path.exists() or path.with_name(filename + '.disabled').exists():
@@ -408,7 +453,24 @@ class NginxManager:
             for item in self.inventory()['items']:
                 if name in item['domains']:
                     raise OperationError('Такой домен уже есть в конфигурации.')
-            return apply_transaction(lambda: atomic_write(path, content.encode()), lambda: path.unlink(missing_ok=True), self.validate, self.reload)
+            result = apply_transaction(lambda: atomic_write(path, content.encode()), lambda: path.unlink(missing_ok=True), self.validate, self.reload)
+            if not issue_ssl:
+                return result
+            try:
+                issue_webroot_certificate(settings.SNC_CERTBOT_BIN, settings.SNC_ACME_WEBROOT, settings.SNC_CERTBOT_LIVE_ROOT, name, data.get('ssl_email'))
+            except OperationError as error:
+                try:
+                    apply_transaction(lambda: path.unlink(missing_ok=True), lambda: atomic_write(path, content.encode()), self.validate, self.reload)
+                except Exception as cleanup_error:
+                    raise OperationError(f'Certbot failed ({error}); temporary HTTP host rollback failed ({cleanup_error}).') from error
+                raise OperationError(f'Certbot не выпустил сертификат; временный HTTP-хост удалён: {error}') from error
+            self.backup('conf.d/' + filename, content.encode())
+            result = apply_transaction(
+                lambda: atomic_write(path, https_content.encode()),
+                lambda: atomic_write(path, content.encode()),
+                self.validate, self.reload,
+            )
+            return 'Хост создан, SSL сертификат выпущен и HTTPS включён. ' + str(result)
 
     def traffic_top(self, limit=5):
         totals = []

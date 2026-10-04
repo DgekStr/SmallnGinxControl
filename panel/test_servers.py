@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import tempfile
 import json
 import shlex
@@ -9,11 +10,12 @@ from urllib.parse import urlencode
 
 from django.test import TestCase, override_settings
 
+from .nginx import NginxManager
 from .models import AuditEvent, MetricSample, Server
 from .servers import ServerForm, initialize_demo, manager_for, public_server, selected_server
 from .transactions import OperationError
 from .remote_worker import RemoteWorker
-from .ssh import PinnedHostKey, key_fingerprint, worker_command
+from .ssh import PinnedHostKey, SSHManager, key_fingerprint, worker_command
 from .metrics import snapshot, sample_from_raw
 
 
@@ -72,6 +74,44 @@ class ServerTests(TestCase):
                 worker.dispatch('read', {'id': '../outside'})
             with self.assertRaises(OperationError):
                 worker.dispatch('shell', {'command': 'id'})
+
+    def test_ssh_manager_sends_challenge_and_final_tls_configs(self):
+        manager = SSHManager.__new__(SSHManager)
+        manager.server = Mock(log_root='/var/log/nginx')
+        manager.parser = NginxManager(demo=True)
+        data = {'name': 'secure.example.com', 'kind': 'proxy', 'port': 80, 'target': 'http://127.0.0.1:3000', 'issue_ssl': True, 'ssl_email': 'ops@example.com'}
+        with patch.object(manager, 'inventory', return_value={'items': []}), patch.object(manager, 'rpc', return_value='ok') as rpc:
+            manager.create(data)
+        payload = rpc.call_args.args[1]
+        self.assertTrue(payload['issue_ssl'])
+        self.assertIn('/.well-known/acme-challenge/', payload['content'])
+        self.assertIn('return 301 https://$host$request_uri;', payload['https_content'])
+        self.assertIn('listen 443 ssl;', payload['https_content'])
+        self.assertEqual(payload['ssl_email'], 'ops@example.com')
+
+    def test_remote_worker_certbot_success_switches_challenge_to_tls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            worker = RemoteWorker(root, root / 'logs', root / 'state')
+            challenge = 'server { listen 80; server_name secure.example.com; }\n'
+            https = 'server { listen 443 ssl; server_name secure.example.com; }\n'
+            data = {'id': 'conf.d/secure.example.com.conf', 'content': challenge, 'issue_ssl': True, 'ssl_domain': 'secure.example.com', 'ssl_email': 'ops@example.com', 'https_content': https}
+            with patch.object(worker, 'lock', return_value=nullcontext()), patch.object(worker, 'validate', return_value='ok'), patch.object(worker, 'reload'), patch('panel.remote_worker.issue_webroot_certificate') as issue:
+                worker.dispatch('create', data)
+            issue.assert_called_once_with('/usr/bin/certbot', '/var/www/html', '/etc/letsencrypt/live', 'secure.example.com', 'ops@example.com')
+            self.assertEqual((root / data['id']).read_text(), https)
+
+    def test_remote_worker_removes_challenge_if_certbot_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            worker = RemoteWorker(root, root / 'logs', root / 'state')
+            data = {'id': 'conf.d/secure.example.com.conf', 'content': 'server { listen 80; }\n', 'issue_ssl': True, 'ssl_domain': 'secure.example.com', 'ssl_email': 'ops@example.com', 'https_content': 'server { listen 443 ssl; }\n'}
+            with patch.object(worker, 'lock', return_value=nullcontext()), patch.object(worker, 'validate', return_value='ok'), patch.object(worker, 'reload'), patch('panel.remote_worker.issue_webroot_certificate', side_effect=OperationError('ACME failed')):
+                with self.assertRaisesRegex(OperationError, 'temporary HTTP host was removed'):
+                    worker.dispatch('create', data)
+            self.assertFalse((root / data['id']).exists())
 
     def test_remote_worker_reads_logs_from_configured_extra_root(self):
         with tempfile.TemporaryDirectory() as directory:

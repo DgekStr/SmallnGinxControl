@@ -12,19 +12,23 @@ from pathlib import Path
 if __package__:
     from .transactions import (
         OperationError, access_log_traffic_bytes, apply_transaction, atomic_write,
+        certificate_days_remaining, issue_webroot_certificate, validate_certificate_request,
         delete_config_transaction, has_proxy_server, is_allowed_log_path,
         is_maintenance_config, maintenance_backup_path, render_maintenance_config,
     )
 
 
 class RemoteWorker:
-    def __init__(self, root, log_root, state='/var/lib/smallnginxcontrol-ssh', maintenance_root='/var/www/html', log_roots=None):
+    def __init__(self, root, log_root, state='/var/lib/smallnginxcontrol-ssh', maintenance_root='/var/www/html', log_roots=None, certbot_bin='/usr/bin/certbot', acme_webroot='/var/www/html', certbot_live_root='/etc/letsencrypt/live'):
         self.root = Path(root).resolve()
         self.log_root = Path(log_root).resolve()
         self.state = Path(state)
         self.maintenance_root = Path(maintenance_root)
         self.maintenance_page = self.maintenance_root / 'maitenance.html'
         self.allowed_log_roots = tuple(dict.fromkeys([self.log_root, *(Path(root).resolve() for root in (log_roots or ['/var/http']))]))
+        self.certbot_bin = certbot_bin
+        self.acme_webroot = acme_webroot
+        self.certbot_live_root = certbot_live_root
 
     def path(self, identifier):
         if not isinstance(identifier, str) or not identifier or '\\' in identifier:
@@ -96,7 +100,10 @@ class RemoteWorker:
                 if total > 4 * 1024 * 1024:
                     raise OperationError('Configuration inventory exceeds 4 MB')
                 maintenance = is_maintenance_config(config['content'])
-                configs.append({**config, 'enabled': path in active and not maintenance, 'maintenance': maintenance, 'toggleable': path.parent in [self.root / 'conf.d', self.root / 'sites-available']})
+                certificate_matches = re.findall(r'(?m)^\s*ssl_certificate\s+(?:"([^"]+)"|\'([^\']+)\'|([^;\s]+))', config['content'])
+                certificate_paths = [value for match in certificate_matches for value in match if value]
+                certificate_days = certificate_days_remaining(certificate_paths) if re.search(r'(?m)^\s*listen\s+[^;]*\bssl\b', config['content']) else None
+                configs.append({**config, 'enabled': path in active and not maintenance, 'maintenance': maintenance, 'certificate_days': certificate_days, 'toggleable': path.parent in [self.root / 'conf.d', self.root / 'sites-available']})
             except (OSError, UnicodeError, OperationError) as error:
                 warnings.append(identifier + ': ' + str(error))
         return {'configs': configs, 'warnings': warnings}
@@ -123,7 +130,31 @@ class RemoteWorker:
             content = data['content'].encode('utf-8')
             if len(content) > 256 * 1024:
                 raise OperationError('Configuration too large')
-            return apply_transaction(lambda: atomic_write(path, content), lambda: path.unlink(missing_ok=True), self.validate, self.reload)
+            issue_ssl = data.get('issue_ssl', False)
+            if type(issue_ssl) is not bool:
+                raise OperationError('issue_ssl must be a boolean')
+            if issue_ssl:
+                domain, email = validate_certificate_request(data.get('ssl_domain'), data.get('ssl_email'))
+                https_content = data.get('https_content', '').encode('utf-8')
+                if not https_content or len(https_content) > 256 * 1024 or b'listen 443 ssl;' not in https_content:
+                    raise OperationError('Final HTTPS configuration is missing or too large')
+            result = apply_transaction(lambda: atomic_write(path, content), lambda: path.unlink(missing_ok=True), self.validate, self.reload)
+            if not issue_ssl:
+                return result
+            try:
+                issue_webroot_certificate(self.certbot_bin, self.acme_webroot, self.certbot_live_root, domain, email)
+            except OperationError as error:
+                try:
+                    apply_transaction(lambda: path.unlink(missing_ok=True), lambda: atomic_write(path, content), self.validate, self.reload)
+                except Exception as cleanup_error:
+                    raise OperationError(f'Certbot failed ({error}); temporary HTTP host rollback failed ({cleanup_error}).') from error
+                raise OperationError(f'Certbot issuance failed; temporary HTTP host was removed: {error}') from error
+            self.backup(data['id'], content)
+            return apply_transaction(
+                lambda: atomic_write(path, https_content),
+                lambda: atomic_write(path, content),
+                self.validate, self.reload,
+            )
         old = path.read_bytes()
         if hashlib.sha256(old).hexdigest() != data.get('revision'):
             raise OperationError('Configuration changed; reload it before saving')
@@ -319,7 +350,12 @@ class RemoteWorker:
 if __name__ == '__main__':
     try:
         payload = json.loads(sys.stdin.read(600000))
-        worker = RemoteWorker(payload['root'], payload['log_root'], log_roots=payload.get('log_roots'))
+        worker = RemoteWorker(
+            payload['root'], payload['log_root'], log_roots=payload.get('log_roots'),
+            certbot_bin=payload.get('certbot_bin', '/usr/bin/certbot'),
+            acme_webroot=payload.get('acme_webroot', '/var/www/html'),
+            certbot_live_root=payload.get('certbot_live_root', '/etc/letsencrypt/live'),
+        )
         result = worker.dispatch(payload['operation'], payload.get('data', {}))
         print(json.dumps({'ok': True, 'result': result}, ensure_ascii=True))
     except Exception as error:

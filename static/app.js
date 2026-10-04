@@ -113,7 +113,9 @@ function hostTable(items) {
     const toggleLabel = item.maintenance ? 'Вернуть прокси' : item.enabled ? 'Отключить' : 'Включить';
     const toggleTitle = !item.toggleable ? 'Нестандартный include: изменение в nginx.conf' : item.maintenance ? 'Вернуть reverse-proxy' : item.enabled ? 'Перевести конфигурацию в обслуживание' : 'Включить конфигурацию';
     const deleteButton = !item.enabled && item.toggleable ? `<button class="icon-button danger" data-action="delete" aria-label="Удалить ${escapeHtml(item.name)}" title="Удалить отключённую конфигурацию">${icon('trash-2')}</button>` : '';
-    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span><span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td><span class="protocol ${item.tls ? 'secure' : ''}">${icon(item.tls ? 'lock-keyhole' : 'globe')}${item.tls ? 'HTTPS' : 'HTTP'}</span></td><td><span class="badge ${item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${toggleTitle}" ${item.toggleable ? '' : 'disabled'}></button><button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
+    const expiryDays = item.tls && Number.isInteger(item.certificate_days) ? item.certificate_days : null;
+    const expiry = expiryDays === null ? '' : `<span class="certificate-expiry ${expiryDays < 0 ? 'expired' : expiryDays <= 14 ? 'warning' : ''}" title="${expiryDays < 0 ? 'Сертификат просрочен' : 'Осталось дней действия сертификата'}">${expiryDays < 0 ? `Просрочен ${Math.abs(expiryDays)} дн.` : expiryDays === 0 ? 'Истекает сегодня' : `${expiryDays} дн.`}</span>`;
+    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span><span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td><div class="protocol-cell"><span class="protocol ${item.tls ? 'secure' : ''}">${icon(item.tls ? 'lock-keyhole' : 'globe')}${item.tls ? 'HTTPS' : 'HTTP'}</span>${expiry}</div></td><td><span class="badge ${item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${toggleTitle}" ${item.toggleable ? '' : 'disabled'}></button><button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
   }).join('');
   return `<div class="table-scroll"><table class="data-table"><thead><tr><th>ДОМЕН / КОНФИГУРАЦИЯ</th><th>НАЗНАЧЕНИЕ</th><th>ПРОТОКОЛ</th><th>СТАТУС</th><th>ДЕЙСТВИЯ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -391,8 +393,35 @@ query('#host-filter').addEventListener('click', (event) => {
   renderHosts();
 });
 query('#host-search').addEventListener('input', (event) => { state.search = event.target.value.trim().toLowerCase(); renderHosts(); });
+
+function ensureSslCreateFields() {
+  let section = query('.ssl-create-options');
+  if (!section) {
+    section = document.createElement('section');
+    section.className = 'ssl-create-options';
+    section.innerHTML = '<label class="check-label"><input type="checkbox" id="host-ssl-issue">Выпустить SSL-сертификат через Certbot</label><p class="muted small"></p><label id="host-ssl-email-label" hidden>Email владельца домена<input id="host-ssl-email" type="email" autocomplete="email" placeholder="admin@example.com"></label>';
+    query('#new-host-target').closest('label').after(section);
+  }
+  const checkbox = query('#host-ssl-issue');
+  const demo = document.body.dataset.mode === 'demo';
+  checkbox.disabled = demo;
+  if (demo) checkbox.checked = false;
+  section.querySelector('p').textContent = demo ? 'В demo сертификаты не выпускаются. Переключитесь на production nginx.' : 'Нужен публичный DNS, направленный на этот сервер, и доступный HTTP-порт 80.';
+  const sync = () => {
+    const enabled = checkbox.checked && !checkbox.disabled;
+    query('#host-ssl-email-label').hidden = !enabled;
+    query('#host-ssl-email').required = enabled;
+  };
+  checkbox.addEventListener('change', sync);
+  sync();
+}
+
 query('#add-host').addEventListener('click', () => {
+  ensureSslCreateFields();
   query('#host-form').reset();
+  query('#host-ssl-email').value = '';
+  query('#host-ssl-email-label').hidden = true;
+  query('#host-ssl-email').required = false;
   query('#new-host-kind').value = state.view === 'proxies' ? 'proxy' : 'host';
   updateTarget();
   query('#host-form-error').hidden = true;
@@ -408,9 +437,12 @@ query('#host-form').addEventListener('submit', (event) => {
   event.preventDefault();
   runAction(event.submitter, async () => {
     query('#host-form-error').hidden = true;
-    await request('hosts', {action: 'create', ...Object.fromEntries(new FormData(event.target))});
+    const data = Object.fromEntries(new FormData(event.target));
+    data.issue_ssl = Boolean(query('#host-ssl-issue')?.checked);
+    if (data.issue_ssl) data.ssl_email = query('#host-ssl-email').value.trim();
+    await request('hosts', {action: 'create', ...data});
     query('#host-dialog').close();
-    toast('Конфигурация создана и включена.');
+    toast(data.issue_ssl ? 'Хост создан, сертификат выпущен и HTTPS включён.' : 'Конфигурация создана и включена.');
     await refreshHosts();
   }, '#host-form-error');
 });

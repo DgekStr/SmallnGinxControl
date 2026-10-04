@@ -6,6 +6,7 @@ Production-установка клонирует версионированны�
 
 - Ubuntu/Debian с systemd и Python 3.12+.
 - Git, nginx и доступ root для управления конфигурациями nginx.
+- Для выпуска Let's Encrypt сертификатов через UI: Certbot, webroot `/var/www/html`, публично разрешённый входящий TCP/80 и DNS-имя, направленное на этот сервер. Само приложение не устанавливает Certbot.
 - Сеть до GitHub/PyPI на время установки.
 - Для прямого управления локальным nginx: `/usr/sbin/nginx`, `/var/log/nginx` и работающий systemd unit `nginx`.
 
@@ -62,8 +63,9 @@ SNC_SECURE_COOKIES=1
 ```sh
 cd /opt/smallnginxcontrol
 git status --short
-git fetch --tags origin
-git checkout v1.0.1
+git fetch origin
+git checkout main
+git pull --ff-only origin main
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python manage.py migrate --noinput
 .venv/bin/python manage.py collectstatic --noinput
@@ -72,6 +74,8 @@ systemctl restart smallnginxcontrol
 systemctl is-active smallnginxcontrol
 systemctl enable --now smallnginxcontrol-log-cleanup.timer
 ```
+
+Тег `v1.0.1` остаётся закреплённым за предыдущим versioned release. Для установки именно этого состояния вместо текущей ветки используйте `git checkout v1.0.1`; новые SSL-функции находятся в `main` и не меняют номер версии.
 
 Если в каталоге есть локальные изменения, сначала сохраните их отдельно и не выполняйте `git reset --hard`.
 

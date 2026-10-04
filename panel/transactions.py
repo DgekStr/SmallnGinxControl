@@ -1,8 +1,16 @@
 import hashlib
+import ipaddress
+import math
 import os
 import re
+import shutil
+import ssl
+import subprocess
 import shlex
 import tempfile
+import time
+from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -13,6 +21,51 @@ class OperationError(Exception):
 MAINTENANCE_MARKER = '# smallnginxcontrol-maintenance'
 MAINTENANCE_URI = '/__smallnginxcontrol_maintenance.html'
 ACCESS_LOG_BYTES_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:\s|$)')
+DNS_LABEL = re.compile(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
+EMAIL_ADDRESS = re.compile(r'^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$')
+
+
+def validate_certificate_request(domain, email):
+    if not isinstance(domain, str) or len(domain) > 253 or '.' not in domain or domain != domain.lower() or domain.startswith('*.'):
+        raise OperationError('Для выпуска SSL укажите точное публичное DNS-имя без wildcard.')
+    try:
+        ipaddress.ip_address(domain)
+    except ValueError:
+        pass
+    else:
+        raise OperationError('Certbot HTTP challenge требует DNS-имя, а не IP-адрес.')
+    labels = domain.rstrip('.').split('.')
+    if domain.endswith('.') or any(not DNS_LABEL.fullmatch(label) for label in labels):
+        raise OperationError('Некорректное DNS-имя для выпуска сертификата.')
+    if not isinstance(email, str) or len(email) > 254 or not EMAIL_ADDRESS.fullmatch(email):
+        raise OperationError('Для Certbot укажите корректный email владельца домена.')
+    return domain, email
+
+
+def issue_webroot_certificate(certbot_bin, webroot, live_root, domain, email):
+    validate_certificate_request(domain, email)
+    if not Path(certbot_bin).is_file():
+        raise OperationError(f'Certbot не найден: {certbot_bin}')
+    webroot_path = Path(webroot)
+    if not webroot_path.is_absolute() or not webroot_path.is_dir():
+        raise OperationError(f'ACME webroot недоступен: {webroot_path}')
+    arguments = [
+        str(certbot_bin), 'certonly', '--webroot', '--webroot-path', str(webroot_path),
+        '--cert-name', domain, '-d', domain, '--non-interactive', '--agree-tos',
+        '--email', email, '--keep-until-expiring', '--deploy-hook', 'systemctl reload nginx',
+    ]
+    try:
+        result = subprocess.run(arguments, capture_output=True, text=True, timeout=300, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise OperationError(f'Ошибка запуска Certbot: {error}') from error
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode:
+        raise OperationError('Certbot не выпустил сертификат: ' + (output[-2000:] or str(result.returncode)))
+    certificate = Path(live_root) / domain / 'fullchain.pem'
+    private_key = Path(live_root) / domain / 'privkey.pem'
+    if not certificate.is_file() or not private_key.is_file():
+        raise OperationError('Certbot завершился без ожидаемой пары fullchain.pem/privkey.pem.')
+    return certificate, private_key
 
 
 def atomic_write(path, content):
@@ -62,6 +115,44 @@ def access_log_traffic_bytes(candidate, roots, sample_size=128 * 1024):
     except OSError:
         return 0
     return sum(int(match.group(1)) for match in ACCESS_LOG_BYTES_PATTERN.finditer(content) if match.group(1) != b'-')
+
+
+@lru_cache(maxsize=512)
+def _certificate_expiry_timestamp(path, mtime_ns):
+    openssl = shutil.which('openssl') or '/usr/bin/openssl'
+    try:
+        result = subprocess.run([openssl, 'x509', '-in', path, '-noout', '-enddate'], capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    match = re.search(r'notAfter=(.+)', result.stdout + result.stderr)
+    if not match:
+        return None
+    try:
+        return ssl.cert_time_to_seconds(match.group(1).strip())
+    except (ValueError, OverflowError):
+        return None
+
+
+def certificate_days_remaining(certificates, now=None):
+    now_timestamp = (now or datetime.now(timezone.utc)).timestamp()
+    values = []
+    for candidate in dict.fromkeys(certificates):
+        if not isinstance(candidate, str) or not candidate or '$' in candidate:
+            continue
+        path = Path(candidate)
+        if not path.is_absolute():
+            continue
+        try:
+            resolved = path.resolve(strict=True)
+            metadata = resolved.stat()
+        except (OSError, RuntimeError):
+            continue
+        expires = _certificate_expiry_timestamp(str(resolved), metadata.st_mtime_ns)
+        if expires is not None:
+            values.append(math.ceil((expires - now_timestamp) / 86400))
+    return min(values) if values else None
 
 
 def is_maintenance_config(content):

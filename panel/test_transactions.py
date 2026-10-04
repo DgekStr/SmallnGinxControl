@@ -1,9 +1,10 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from panel.transactions import OperationError, apply_transaction, atomic_write, configure_host_access_logs
+from panel.transactions import OperationError, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, issue_webroot_certificate, validate_certificate_request
 
 
 class TransactionTests(unittest.TestCase):
@@ -76,3 +77,46 @@ class TransactionTests(unittest.TestCase):
         log_path = next(token for token in rendered.decode().split() if token.startswith('/var/log/nginx/'))
         self.assertLess(len(Path(log_path).name), 255)
         self.assertEqual(len(changed), 1)
+
+    def test_certificate_days_remaining_returns_earliest_expiry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / 'first.crt'
+            second = Path(directory) / 'second.crt'
+            first.write_text('certificate')
+            second.write_text('certificate')
+            responses = [
+                Mock(returncode=0, stdout='', stderr='notAfter=Oct 20 00:00:00 2026 GMT'),
+                Mock(returncode=0, stdout='', stderr='notAfter=Oct 14 00:00:00 2026 GMT'),
+            ]
+            with patch('panel.transactions.subprocess.run', side_effect=responses):
+                remaining = certificate_days_remaining([str(first), str(second)], datetime(2026, 10, 4, tzinfo=timezone.utc))
+            self.assertEqual(remaining, 10)
+
+    def test_certificate_request_requires_public_dns_and_valid_contact(self):
+        self.assertEqual(validate_certificate_request('app.example.com', 'ops@example.com'), ('app.example.com', 'ops@example.com'))
+        for domain in ['192.0.2.5', '*.example.com', 'localhost', 'invalid_host.example.com']:
+            with self.subTest(domain=domain), self.assertRaises(OperationError):
+                validate_certificate_request(domain, 'ops@example.com')
+        with self.assertRaises(OperationError):
+            validate_certificate_request('app.example.com', 'bad-email')
+
+    def test_certbot_webroot_invocation_uses_argv_and_checks_keypair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            certbot = root / 'certbot'
+            certbot.write_text('placeholder')
+            webroot = root / 'webroot'
+            webroot.mkdir()
+            live = root / 'live' / 'app.example.com'
+            live.mkdir(parents=True)
+            (live / 'fullchain.pem').write_text('public cert')
+            (live / 'privkey.pem').write_text('private key')
+            with patch('panel.transactions.subprocess.run') as run:
+                run.return_value = Mock(returncode=0, stdout='issued', stderr='')
+                result = issue_webroot_certificate(certbot, webroot, root / 'live', 'app.example.com', 'ops@example.com')
+            self.assertEqual(result, (live / 'fullchain.pem', live / 'privkey.pem'))
+            arguments = run.call_args.args[0]
+            self.assertEqual(arguments[0], str(certbot))
+            self.assertIn('--webroot', arguments)
+            self.assertEqual(arguments[arguments.index('--deploy-hook') + 1], 'systemctl reload nginx')
+            self.assertEqual(run.call_args.kwargs['timeout'], 300)
