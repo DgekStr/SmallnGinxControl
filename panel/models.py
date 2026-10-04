@@ -69,6 +69,8 @@ class MetricSample(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     cpu = models.FloatField()
     memory = models.FloatField()
+    disk_used_bytes = models.PositiveBigIntegerField(default=0)
+    disk_total_bytes = models.PositiveBigIntegerField(default=0)
     rx_rate = models.FloatField()
     tx_rate = models.FloatField()
     rx_mb = models.FloatField()

@@ -3,6 +3,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from pathlib import Path
 
 import portalocker
 import psutil
@@ -24,7 +25,7 @@ def sample_from_raw(raw, previous, now):
         cpu = max(0, min(100, (1 - idle / total) * 100)) if total > 0 else 0
         rx_rate = max(0, raw['rx_bytes'] - before['rx_bytes']) / elapsed / 1_000_000
         tx_rate = max(0, raw['tx_bytes'] - before['tx_bytes']) / elapsed / 1_000_000
-    return dict(cpu=cpu, memory=raw['memory'], rx_rate=rx_rate, tx_rate=tx_rate, rx_mb=raw['rx_bytes'] / 1_000_000, tx_mb=raw['tx_bytes'] / 1_000_000, uptime=raw['uptime'])
+    return dict(cpu=cpu, memory=raw['memory'], disk_used_bytes=raw.get('disk_used_bytes', 0), disk_total_bytes=raw.get('disk_total_bytes', 0), rx_rate=rx_rate, tx_rate=tx_rate, rx_mb=raw['rx_bytes'] / 1_000_000, tx_mb=raw['tx_bytes'] / 1_000_000, uptime=raw['uptime'])
 
 
 def local_raw(interface):
@@ -34,7 +35,8 @@ def local_raw(interface):
     else:
         counters = {name: value for name, value in counters.items() if name != 'lo' and not name.startswith(('veth', 'docker', 'br-', 'virbr'))}
     cpu = psutil.cpu_times()
-    return dict(cpu_total=sum(cpu) - getattr(cpu, 'guest', 0) - getattr(cpu, 'guest_nice', 0), cpu_idle=cpu.idle + getattr(cpu, 'iowait', 0), memory=psutil.virtual_memory().percent, rx_bytes=sum(value.bytes_recv for value in counters.values()), tx_bytes=sum(value.bytes_sent for value in counters.values()), uptime=time.time() - psutil.boot_time())
+    disk = psutil.disk_usage(Path(settings.BASE_DIR).anchor or '/')
+    return dict(cpu_total=sum(cpu) - getattr(cpu, 'guest', 0) - getattr(cpu, 'guest_nice', 0), cpu_idle=cpu.idle + getattr(cpu, 'iowait', 0), memory=psutil.virtual_memory().percent, disk_used_bytes=disk.used, disk_total_bytes=disk.total, rx_bytes=sum(value.bytes_recv for value in counters.values()), tx_bytes=sum(value.bytes_sent for value in counters.values()), uptime=time.time() - psutil.boot_time())
 
 
 def collect_server(server, previous):
@@ -44,7 +46,7 @@ def collect_server(server, previous):
         if server.mode == 'demo':
             offset = sum(server.pk.encode()) % 11
             phase = time.time() / 25 + offset
-            sample = dict(cpu=18 + offset + math.sin(phase) * 7 + math.sin(phase * 3) * 3, memory=34.6 + offset, rx_rate=3.2 + math.sin(phase * .7) * 1.6, tx_rate=1.4 + math.cos(phase) * .7, rx_mb=28416 + offset * 500 + phase % 400, tx_mb=12780 + phase % 200, uptime=(18 + offset) * 86400 + 7 * 3600 + now % 3600)
+            sample = dict(cpu=18 + offset + math.sin(phase) * 7 + math.sin(phase * 3) * 3, memory=34.6 + offset, disk_used_bytes=320_000_000_000 + offset * 1_000_000_000, disk_total_bytes=512_000_000_000, rx_rate=3.2 + math.sin(phase * .7) * 1.6, tx_rate=1.4 + math.cos(phase) * .7, rx_mb=28416 + offset * 500 + phase % 400, tx_mb=12780 + phase % 200, uptime=(18 + offset) * 86400 + 7 * 3600 + now % 3600)
         else:
             if server.mode == 'ssh':
                 from .servers import manager_for
@@ -117,7 +119,7 @@ def snapshot(server):
     history = list(samples.filter(created_at__gte=timezone.now() - timedelta(minutes=30)).order_by('id').values('created_at', 'cpu', 'rx_rate', 'tx_rate'))
     earliest = samples.order_by('id').first()
     return {
-        'current': {field: getattr(latest, field) for field in ['cpu', 'memory', 'rx_rate', 'tx_rate', 'rx_mb', 'tx_mb', 'uptime', 'created_at']},
+        'current': {field: getattr(latest, field) for field in ['cpu', 'memory', 'disk_used_bytes', 'disk_total_bytes', 'rx_rate', 'tx_rate', 'rx_mb', 'tx_mb', 'uptime', 'created_at']},
         'history': history, 'peaks': peaks, 'since': earliest.created_at,
         'stale': (timezone.now() - latest.created_at).total_seconds() > 20,
         'interface': server.interface or 'Физические интерфейсы',

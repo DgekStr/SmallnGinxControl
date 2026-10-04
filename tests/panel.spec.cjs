@@ -10,9 +10,14 @@ async function login(page, password = '12345') {
 
 test('overview renders assets, metrics and responsive layouts', async ({page}) => {
   const errors = [];
+  let trafficRequests = 0;
   page.on('pageerror', (error) => errors.push(error.message));
+  page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/traffic/') trafficRequests++; });
   await login(page);
+  expect(trafficRequests).toBe(1);
   await expect(page.locator('#metric-uptime')).toContainText('дн');
+  await expect(page.locator('#current-disk')).toContainText('%');
+  await expect(page.locator('#disk-bar')).toHaveCSS('width', /.+/);
   await expect(page.locator('#top-traffic-list .traffic-rank')).toHaveCount(5);
   const trafficBytes = await page.locator('#top-traffic-list .traffic-rank').evaluateAll((rows) => rows.map((row) => Number(row.dataset.bytes)));
   expect(trafficBytes).toEqual([...trafficBytes].sort((left, right) => right - left));
@@ -84,6 +89,9 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   const download = page.waitForEvent('download');
   await page.locator('#download-logs').click();
   expect((await download).suggestedFilename()).toBe('nginx-access.log');
+  const xmlDownload = page.waitForEvent('download');
+  await page.locator('#export-logs-xml').click();
+  expect((await xmlDownload).suggestedFilename()).toBe('nginx-access.xml');
   await page.locator('[data-view="proxies"]').click();
   await row.getByRole('switch').click();
   await page.locator('#confirm-accept').click();
@@ -193,7 +201,19 @@ test('mobile navigation and search', async ({page}) => {
 });
 
 test('server profiles isolate hosts, config, logs and tab selection', async ({page}) => {
+  await page.route('**/api/overview/**', async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    const serverId = new URL(route.request().url()).searchParams.get('server');
+    const current = payload.metrics.current || {cpu: 10, memory: 20, rx_rate: 0, tx_rate: 0, rx_mb: 0, tx_mb: 0, uptime: 3600, created_at: new Date().toISOString()};
+    payload.metrics.current = {...current, disk_used_bytes: serverId === 'local' ? 100 : 900, disk_total_bytes: 1000};
+    payload.metrics.peaks = payload.metrics.peaks || {cpu: 10, rx: 0, tx: 0};
+    payload.metrics.history = payload.metrics.history || [];
+    payload.metrics.since = payload.metrics.since || current.created_at;
+    await route.fulfill({response, json: payload});
+  });
   await login(page);
+  await expect(page.locator('#current-disk')).toHaveText('10%');
   await page.locator('[data-view="servers"]').click();
   await page.locator('#add-server').click();
   await page.locator('#server-mode').selectOption('demo');
@@ -208,6 +228,7 @@ test('server profiles isolate hosts, config, logs and tab selection', async ({pa
   await expect(page.locator('#toast-region')).toContainText('Соединение установлено');
   await row.locator('[data-server-action="select"]').click();
   await expect(page.locator('#overview-hosts tbody tr')).toHaveCount(2);
+  await expect(page.locator('#current-disk')).toHaveText('90%');
   await expect(page.locator('#page-subtitle')).toContainText('192.0.2.16');
   await expect(page.locator('#overview-hosts')).not.toContainText('focuslens.dev');
   await page.locator('[data-view="hosts"]').click();
@@ -226,12 +247,14 @@ test('server profiles isolate hosts, config, logs and tab selection', async ({pa
   await page.locator('#server-select').selectOption('local');
   await page.locator('#confirm-accept').click();
   await expect(page.locator('#main-config')).toHaveValue(/2048|4096/);
+  await expect(page.locator('#current-disk')).toHaveText('10%');
   await page.locator('[data-view="hosts"]').click();
   await expect(page.locator('#hosts-table')).toContainText('focuslens.dev');
   await expect(page.locator('#hosts-table')).not.toContainText('welcome.demo');
   await page.locator('#server-select').selectOption(identifier);
   await page.reload();
   await expect(page.locator('#server-select')).toHaveValue(identifier);
+  await expect(page.locator('#current-disk')).toHaveText('90%');
   await expect(page.locator('#hosts-table')).toContainText('welcome.demo');
   await page.locator('[data-view="logs"]').click();
   await expect(page.locator('#log-content')).toContainText('512');
@@ -280,6 +303,36 @@ test('unavailable SSH profile never falls back to local server', async ({page}) 
   await page.locator('#confirm-accept').click();
   await expect(page.locator('#server-select')).toHaveValue('local');
   await expect(page.locator('#overview-hosts tbody tr')).toHaveCount(6);
+});
+
+test('nginx log XML export preserves sources and escapes log text', async ({page}) => {
+  await login(page);
+  const result = await page.evaluate(() => {
+    state.serverId = 'local';
+    state.logKind = 'error';
+    state.logSources = ['/var/log/nginx/error.log'];
+    state.logContent = '[error.log]\nupstream sent <bad> & "quoted" data';
+    const xml = buildLogsXml();
+    const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+    return {
+      hasParserError: Boolean(parsed.querySelector('parsererror')),
+      kind: parsed.documentElement.getAttribute('kind'),
+      path: parsed.querySelector('logfile')?.getAttribute('path'),
+      entry: parsed.querySelector('entry')?.textContent,
+    };
+  });
+  expect(result).toEqual({hasParserError: false, kind: 'error', path: '/var/log/nginx/error.log', entry: 'upstream sent <bad> & "quoted" data'});
+});
+
+test('switching server clears previous SSD usage while new metrics load', async ({page}) => {
+  await login(page);
+  await expect(page.locator('#current-disk')).toBeAttached();
+  const previousDisk = await page.locator('#current-disk').textContent();
+  await page.evaluate(() => clearServerData());
+  await expect(page.locator('#current-disk')).toHaveText('—');
+  const width = await page.locator('#disk-bar').evaluate((element) => element.style.width);
+  expect(width).toBe('0%');
+  expect(previousDisk).toContain('%');
 });
 
 test('password change persists across logout and login', async ({page}) => {

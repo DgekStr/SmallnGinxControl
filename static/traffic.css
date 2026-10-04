@@ -4,4 +4,5 @@
 .protocol-cell{display:grid;justify-items:start;gap:5px}.certificate-expiry{font-size:10px;color:var(--muted);white-space:nowrap}.certificate-expiry.warning{color:var(--amber)}.certificate-expiry.expired{color:var(--red)}
 .host-traffic{display:flex;gap:10px;white-space:nowrap;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}
 .host-open-link{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-left:5px;border-radius:4px;text-decoration:none;vertical-align:middle}.host-open-link:hover{background:var(--surface-hover);color:var(--cyan)}
+.green-bar{background:var(--green)}
 .domain-name{display:inline}

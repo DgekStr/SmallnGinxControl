@@ -16,7 +16,7 @@ from .servers import ServerForm, initialize_demo, manager_for, public_server, se
 from .transactions import OperationError
 from .remote_worker import RemoteWorker
 from .ssh import PinnedHostKey, SSHManager, key_fingerprint, worker_command
-from .metrics import snapshot, sample_from_raw
+from .metrics import local_raw, snapshot, sample_from_raw
 
 
 class ServerTests(TestCase):
@@ -271,11 +271,19 @@ class ServerTests(TestCase):
         self.assertEqual(self.client.get('/api/hosts/', {'server': 'deleted'}).status_code, 400)
 
     def test_network_counter_reset_is_not_negative(self):
-        raw = dict(cpu_total=100, cpu_idle=50, memory=20, rx_bytes=500, tx_bytes=100, uptime=10)
+        raw = dict(cpu_total=100, cpu_idle=50, memory=20, disk_used_bytes=400, disk_total_bytes=1000, rx_bytes=500, tx_bytes=100, uptime=10)
         previous = ({**raw, 'cpu_total': 200, 'rx_bytes': 900, 'uptime': 100}, 5)
         sample = sample_from_raw(raw, previous, 10)
         self.assertEqual(sample['rx_rate'], 0)
         self.assertEqual(sample['cpu'], 0)
+        self.assertEqual(sample['disk_used_bytes'], 400)
+        self.assertEqual(sample['disk_total_bytes'], 1000)
+
+    def test_local_raw_reports_root_disk_usage(self):
+        raw = local_raw('')
+        self.assertGreater(raw['disk_total_bytes'], 0)
+        self.assertGreaterEqual(raw['disk_used_bytes'], 0)
+        self.assertLessEqual(raw['disk_used_bytes'], raw['disk_total_bytes'])
 
     def test_stale_profile_cannot_run_nginx_operation(self):
         from django.contrib.auth import get_user_model

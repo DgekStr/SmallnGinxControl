@@ -6,7 +6,7 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character
 const icon = (name, extra = '') => `<i data-lucide="${name}" ${extra}></i>`;
 const number = (value, digits = 1) => Number(value || 0).toLocaleString('ru-RU', {maximumFractionDigits: digits});
 const time = (value) => new Date(value).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access', overview: null, trafficTop: [], trafficFetchedAt: 0, config: null, editor: null, charts: {}, busy: false, polling: false, logContent: ''};
+const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access', overview: null, trafficTop: [], trafficFetchedAt: 0, config: null, editor: null, charts: {}, busy: false, polling: false, logContent: '', logSources: []};
 Object.assign(state, {servers: [], serverId: sessionStorage.getItem('snc-server') || 'local', serverRevision: null, generation: 0, switching: false, serverReady: false, inventoryLoaded: false, editingServer: null});
 const titles = {
   servers: ['Серверы nginx', 'NGINX / SERVER CONNECTIONS', 'Серверы'],
@@ -159,19 +159,24 @@ function renderHosts() {
 
 async function refreshHosts() {
   const generation = state.generation;
-  const result = await request('hosts');
-  let trafficByHost = {};
-  try {
-    trafficByHost = (await request('traffic')).hosts || {};
-  } catch (error) {
-    if (error.stale) throw error;
-  }
+  const [result, traffic] = await Promise.all([
+    request('hosts'),
+    request('traffic').catch((error) => {
+      if (error.stale) throw error;
+      return null;
+    }),
+  ]);
+  const trafficByHost = traffic?.hosts || {};
   if (generation !== state.generation) {
     const error = new Error('Ответ предыдущего сервера отклонён.');
     error.stale = true;
     throw error;
   }
   state.hosts = result.items.map((item) => ({...item, traffic: trafficByHost[item.id]}));
+  if (traffic) {
+    state.trafficFetchedAt = Date.now();
+    renderTrafficTop(traffic);
+  }
   state.inventoryLoaded = true;
   query('#inventory-warnings').textContent = result.warnings.join('\n');
   query('#inventory-warnings').hidden = !result.warnings.length;
@@ -213,6 +218,17 @@ function renderMetrics() {
   query('#side-status').innerHTML = `<span class="status-dot ${result.nginx.active ? '' : 'off'}"></span>${result.mode === 'demo' ? 'Демосервер' : result.nginx.active ? 'nginx работает' : 'nginx остановлен'}`;
   const current = metrics.current;
   if (!current) { query('#metric-period').textContent = 'Ожидание первого измерения'; return; }
+  if (!query('#current-disk')) {
+    const details = query('.health-section .system-details');
+    const heading = document.createElement('div');
+    heading.className = 'resource-heading';
+    heading.innerHTML = '<span><i data-lucide="hard-drive"></i>SSD-диск /</span><strong id="current-disk">—</strong>';
+    const track = document.createElement('div');
+    track.className = 'progress-track';
+    track.innerHTML = '<div id="disk-bar" class="green-bar"></div>';
+    details.before(heading, track);
+    icons();
+  }
   const days = Math.floor(current.uptime / 86400);
   const hours = Math.floor(current.uptime % 86400 / 3600);
   query('#metric-uptime').innerHTML = `${days}<small>дн</small> ${hours}<small>ч</small>`;
@@ -223,8 +239,14 @@ function renderMetrics() {
   query('#metric-tx').textContent = number(current.tx_mb, 0);
   query('#current-cpu').textContent = number(current.cpu) + '%';
   query('#current-memory').textContent = number(current.memory) + '%';
+  const diskTotal = Number(current.disk_total_bytes) || 0;
+  const diskUsed = Number(current.disk_used_bytes) || 0;
+  const diskPercent = diskTotal > 0 ? Math.min(100, diskUsed / diskTotal * 100) : 0;
+  query('#current-disk').textContent = diskTotal > 0 ? number(diskPercent) + '%' : '—';
+  query('#current-disk').title = diskTotal > 0 ? `Занято ${trafficSize(diskUsed)} из ${trafficSize(diskTotal)} на разделе /` : 'Данные о диске недоступны';
   query('#cpu-bar').style.width = Math.min(100, current.cpu) + '%';
   query('#memory-bar').style.width = Math.min(100, current.memory) + '%';
+  query('#disk-bar').style.width = diskPercent + '%';
   query('#rx-rate').textContent = number(current.rx_rate, 2);
   query('#tx-rate').textContent = number(current.tx_rate, 2);
   query('#network-interface').textContent = result.mode === 'demo' ? 'ens18 · демо' : metrics.interface;
@@ -278,7 +300,10 @@ async function refreshTrafficTop() {
     query('#top-traffic-period').textContent = 'Трафик access log';
     query('#top-traffic-list').textContent = `Не удалось загрузить рейтинг: ${error.message}`;
   } finally {
-    state.trafficFetchedAt = Date.now();
+      if (traffic) {
+        state.trafficFetchedAt = Date.now();
+        renderTrafficTop(traffic);
+      }
   }
 }
 
@@ -334,7 +359,7 @@ async function route() {
   closeMenu();
   try {
     if (next === 'servers') await refreshServers();
-    if (next === 'overview') { Object.values(state.charts).forEach((chart) => chart.resize()); renderMetrics(); await refreshTrafficTop(); }
+    if (next === 'overview') { Object.values(state.charts).forEach((chart) => chart.resize()); renderMetrics(); if (Date.now() - state.trafficFetchedAt >= 60000) await refreshTrafficTop(); }
     if (next === 'hosts' || next === 'proxies') renderHosts();
     if (next === 'logs') await loadLogs();
     if (next === 'config') await loadConfig();
@@ -346,11 +371,41 @@ async function route() {
 async function loadLogs() {
   const response = await request('logs', undefined, {id: query('#log-host').value, kind: state.logKind, lines: query('#log-lines').value});
   state.logContent = response.content;
+  state.logSources = response.sources;
   query('#log-content').textContent = response.content || 'Нет записей.';
   query('#log-note').textContent = response.note;
   query('#log-source').textContent = response.sources.join(' · ') || `nginx / ${state.logKind}.log`;
   query('#log-timestamp').textContent = time(Date.now());
   if (query('#log-live').checked) query('#log-content').scrollTop = query('#log-content').scrollHeight;
+}
+
+function buildLogsXml() {
+  const xml = document.implementation.createDocument('', 'nginx-logs', null);
+  const root = xml.documentElement;
+  root.setAttribute('server-id', state.serverId);
+  root.setAttribute('kind', state.logKind);
+  root.setAttribute('exported-at', new Date().toISOString());
+  const sources = new Map(state.logSources.map((path) => [path.split(/[\\/]/).pop(), path]));
+  let currentLog = null;
+  for (const line of state.logContent.split(/\r?\n/)) {
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header && sources.has(header[1])) {
+      currentLog = xml.createElement('logfile');
+      currentLog.setAttribute('path', sources.get(header[1]));
+      root.append(currentLog);
+      continue;
+    }
+    if (!line) continue;
+    if (!currentLog) {
+      currentLog = xml.createElement('logfile');
+      currentLog.setAttribute('path', state.logSources[0] || 'nginx');
+      root.append(currentLog);
+    }
+    const entry = xml.createElement('entry');
+    entry.textContent = line;
+    currentLog.append(entry);
+  }
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(xml);
 }
 
 async function loadConfig() {
@@ -536,6 +591,14 @@ query('#download-logs').addEventListener('click', () => {
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
+query('#export-logs-xml').addEventListener('click', () => {
+  const anchor = document.createElement('a');
+  const url = URL.createObjectURL(new Blob([buildLogsXml()], {type: 'application/xml;charset=utf-8'}));
+  anchor.href = url;
+  anchor.download = `nginx-${state.logKind}.xml`;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 query('#chart-range').addEventListener('change', renderMetrics);
 query('#refresh-traffic-top').addEventListener('click', (event) => runAction(event.currentTarget, refreshTrafficTop));
 query('#theme-toggle').addEventListener('click', () => {
@@ -624,10 +687,14 @@ function clearServerData() {
   query('#top-traffic-list').innerHTML = '<div class="traffic-top-empty">Загрузка…</div>';
   query('#config-revision').textContent = '';
   for (const id of ['metric-uptime', 'metric-cpu', 'metric-lan', 'metric-rx', 'metric-tx', 'current-cpu', 'current-memory', 'rx-rate', 'tx-rate', 'network-interface', 'last-update', 'nginx-version']) query('#' + id).textContent = '—';
+  const diskValue = query('#current-disk');
+  if (diskValue) { diskValue.textContent = '—'; diskValue.title = 'Ожидание данных выбранного сервера'; }
   query('#cpu-caption').textContent = 'За период наблюдения';
   query('#metric-period').textContent = 'Ожидание данных';
   query('#cpu-bar').style.width = '0%';
   query('#memory-bar').style.width = '0%';
+  const diskBar = query('#disk-bar');
+  if (diskBar) diskBar.style.width = '0%';
   query('#health-badge').textContent = 'Подключение';
   query('#health-badge').className = 'badge neutral';
   query('#side-status').textContent = 'Подключение…';
@@ -651,9 +718,9 @@ async function loadServerContext(identifier) {
   renderServerContext();
   renderServers();
   try {
-    await refreshHosts();
-    await refreshOverview();
-    if (state.view === 'overview') await refreshTrafficTop();
+    await Promise.all([refreshHosts(), refreshOverview()]);
+    state.serverReady = state.inventoryLoaded;
+    if (state.view === 'overview' && Date.now() - state.trafficFetchedAt >= 60000) await refreshTrafficTop();
     if (state.view === 'config') await loadConfig();
     if (state.view === 'logs') await loadLogs();
     if (state.view === 'audit') await loadAudit();

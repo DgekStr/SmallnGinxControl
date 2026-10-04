@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -318,6 +319,7 @@ class RemoteWorker:
     def raw_metrics(self, interface):
         cpu = [int(value) for value in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
         memory = {parts[0].rstrip(':'): int(parts[1]) for line in Path('/proc/meminfo').read_text().splitlines() if len(parts := line.split()) >= 2}
+        disk = shutil.disk_usage('/')
         counters = {}
         for line in Path('/proc/net/dev').read_text().splitlines()[2:]:
             name, values = line.split(':', 1)
@@ -331,7 +333,7 @@ class RemoteWorker:
             names = [name for name in counters if (Path('/sys/class/net') / name / 'device').exists()]
             if not names:
                 names = [name for name in counters if name != 'lo' and not name.startswith(('veth', 'docker', 'br-', 'virbr'))]
-        return {'cpu_total': sum(cpu), 'cpu_idle': cpu[3] + cpu[4], 'memory': (1 - memory['MemAvailable'] / memory['MemTotal']) * 100, 'rx_bytes': sum(counters[name][0] for name in names), 'tx_bytes': sum(counters[name][1] for name in names), 'uptime': float(Path('/proc/uptime').read_text().split()[0]), 'interface': ', '.join(names)}
+        return {'cpu_total': sum(cpu), 'cpu_idle': cpu[3] + cpu[4], 'memory': (1 - memory['MemAvailable'] / memory['MemTotal']) * 100, 'disk_used_bytes': disk.used, 'disk_total_bytes': disk.total, 'rx_bytes': sum(counters[name][0] for name in names), 'tx_bytes': sum(counters[name][1] for name in names), 'uptime': float(Path('/proc/uptime').read_text().split()[0]), 'interface': ', '.join(names)}
 
     def dispatch(self, operation, data):
         if operation == 'inventory':

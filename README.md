@@ -53,6 +53,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 - SSH по паролю, приватному ключу или SSH-агенту; проверка закреплённого SHA256-отпечатка и шифрование сохранённого секрета.
 - Хешированные пароли, сессии Django, CSRF, ограничение попыток входа, POST-выход.
 - Uptime дней/часов, пики CPU и LAN, текущая CPU/RAM, RX/TX в МБ и скорости в МБ/с.
+- Занятость системного SSD/root-раздела в процентах с индикатором использования.
 - TOP-5 активных vhost/reverse proxy по отданным bytes-sent из access logs, с убывающими горизонтальными графиками.
 - Срок хранения host logs задаётся в Настройках; ежедневный systemd timer ротирует и очищает только `*-data.log`.
 - Хосты и reverse proxy, поиск домена/пути/upstream, фильтры состояния.
@@ -116,7 +117,7 @@ npm run test:e2e
 
 В Windows тесты используют установленный Google Chrome; браузер можно выбрать через SNC_TEST_BROWSER. В Linux предварительно выполнить `npx playwright install chromium`. Тесты запускаются в отдельной локальной демосреде; рабочее демо не меняют. Готовые ресурсы находятся в static/vendor, Node.js нужен только для их обновления и тестов. Изображение static/brand.png взято из предоставленного проекта CRM/focuslens-site/assets/logo_dark_tile.png. Лицензии библиотек сохранены рядом с ресурсами.
 
-Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая версия `v1.0.2`: **72 backend-теста и 10 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention, TOP-5 sampled traffic и per-host download/upload counters. Подробности и ограничения предыдущего релиза: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
+Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая версия `v1.0.2`: **73 backend-теста и 13 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention, TOP-5 sampled traffic и per-host download/upload counters. Подробности и ограничения предыдущего релиза: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
 
 
 ## Документы
