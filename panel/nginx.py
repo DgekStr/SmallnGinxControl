@@ -14,7 +14,8 @@ from django.conf import settings
 from .transactions import (
     OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
     certificate_days_remaining, configure_host_access_logs, delete_config_transaction,
-    ensure_traffic_log_format, issue_webroot_certificate, validate_certificate_request,
+    ensure_traffic_log_format, issue_webroot_certificate, set_global_traffic_block as apply_global_traffic_block,
+    validate_certificate_request, validate_maintenance_page_path,
     has_proxy_server, is_allowed_log_path,
     is_maintenance_config, maintenance_backup_path, render_maintenance_config,
 )
@@ -216,6 +217,44 @@ class NginxManager:
     def require_maintenance_page(self):
         if not self.maintenance_page.is_file():
             raise OperationError(f'Страница обслуживания {self.maintenance_page} не найдена.')
+
+    def validate_traffic_maintenance_page(self, page_path):
+        if self.demo:
+            raise OperationError('Глобальная блокировка доступна только на рабочем nginx-сервере.')
+        return validate_maintenance_page_path(page_path)
+
+    def set_traffic_maintenance(self, enabled, page_path):
+        if self.demo:
+            raise OperationError('Глобальная блокировка доступна только на рабочем nginx-сервере.')
+        config_files, excluded = [], []
+        for item in self.inventory()['items']:
+            if not item['enabled']:
+                continue
+            identifier = item['id']
+            if 'stream.d' in Path(identifier).parts:
+                continue
+            path = self.path(identifier)
+            nodes = self.parse(path)
+            admin_upstream = False
+            for node in walk(nodes):
+                if node['directive'] not in {'proxy_pass', 'fastcgi_pass', 'uwsgi_pass', 'scgi_pass', 'grpc_pass'} or not node['args']:
+                    continue
+                upstream = urlsplit(node['args'][0])
+                try:
+                    port = upstream.port
+                except ValueError:
+                    port = None
+                local_hosts = {'127.0.0.1', 'localhost', settings.SNC_SERVER}
+                if upstream.hostname in local_hosts and port in {settings.SNC_PORT, settings.SNC_PORT + 1}:
+                    admin_upstream = True
+                    break
+            if admin_upstream:
+                excluded.append(item['name'])
+            else:
+                config_files.append((identifier, path))
+        result = apply_global_traffic_block(self.root, self.state, page_path, enabled, config_files, self.validate, self.reload)
+        result['excluded_management_hosts'] = excluded
+        return result
 
     def save(self, identifier, content, expected_revision):
         if not isinstance(content, str) or len(content.encode('utf-8')) > 256 * 1024:

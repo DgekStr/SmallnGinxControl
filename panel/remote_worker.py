@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 if __package__:
     from .transactions import (
@@ -16,11 +17,12 @@ if __package__:
         certificate_days_remaining, issue_webroot_certificate, validate_certificate_request,
         delete_config_transaction, ensure_traffic_log_format, has_proxy_server, is_allowed_log_path,
         is_maintenance_config, maintenance_backup_path, render_maintenance_config,
+        set_global_traffic_block, validate_maintenance_page_path,
     )
 
 
 class RemoteWorker:
-    def __init__(self, root, log_root, state='/var/lib/smallnginxcontrol-ssh', maintenance_root='/var/www/html', log_roots=None, certbot_bin='/usr/bin/certbot', acme_webroot='/var/www/html', certbot_live_root='/etc/letsencrypt/live'):
+    def __init__(self, root, log_root, state='/var/lib/smallnginxcontrol-ssh', maintenance_root='/var/www/html', log_roots=None, certbot_bin='/usr/bin/certbot', acme_webroot='/var/www/html', certbot_live_root='/etc/letsencrypt/live', management_host='192.0.2.15', management_port=7444, management_https_port=7445):
         self.root = Path(root).resolve()
         self.log_root = Path(log_root).resolve()
         self.state = Path(state)
@@ -30,6 +32,9 @@ class RemoteWorker:
         self.certbot_bin = certbot_bin
         self.acme_webroot = acme_webroot
         self.certbot_live_root = certbot_live_root
+        self.management_host = management_host
+        self.management_port = int(management_port)
+        self.management_https_port = int(management_https_port)
 
     def path(self, identifier):
         if not isinstance(identifier, str) or not identifier or '\\' in identifier:
@@ -120,6 +125,37 @@ class RemoteWorker:
     def require_maintenance_page(self):
         if not self.maintenance_page.is_file():
             raise OperationError('Maintenance page is missing: ' + str(self.maintenance_page))
+
+    def validate_traffic_maintenance_page(self, page_path):
+        return validate_maintenance_page_path(page_path)
+
+    def set_traffic_maintenance(self, enabled, page_path):
+        config_files, excluded = [], []
+        for config in self.inventory()['configs']:
+            if not config['enabled'] or config.get('maintenance'):
+                continue
+            identifier = config['id']
+            if 'stream.d' in Path(identifier).parts:
+                continue
+            content = config['content']
+            admin_upstream = False
+            for match in re.finditer(r'(?m)^\s*(?:proxy_pass|fastcgi_pass|uwsgi_pass|scgi_pass|grpc_pass)\s+([^;]+);', content):
+                target = match.group(1).strip().strip('"\'')
+                upstream = urlsplit(target)
+                try:
+                    port = upstream.port
+                except ValueError:
+                    port = None
+                if upstream.hostname in {'127.0.0.1', 'localhost', self.management_host} and port in {self.management_port, self.management_https_port}:
+                    admin_upstream = True
+                    break
+            if admin_upstream:
+                excluded.append(identifier)
+            else:
+                config_files.append((identifier, self.path(identifier)))
+        result = set_global_traffic_block(self.root, self.state, page_path, enabled, config_files, self.validate, self.reload)
+        result['excluded_management_hosts'] = excluded
+        return result
 
     def edit(self, action, data):
         path = self.path(data['id'])
@@ -355,6 +391,11 @@ class RemoteWorker:
             return self.status()
         if operation == 'metrics':
             return self.raw_metrics(data.get('interface', ''))
+        if operation == 'validate_traffic_maintenance_page':
+            return {'path': self.validate_traffic_maintenance_page(data.get('page_path', ''))}
+        if operation == 'traffic_maintenance':
+            with self.lock():
+                return self.set_traffic_maintenance(data.get('enabled'), data.get('page_path', ''))
         if operation not in {'save', 'create', 'toggle', 'test', 'reload', 'restart'}:
             raise OperationError('Unknown operation')
         with self.lock():
@@ -376,6 +417,9 @@ if __name__ == '__main__':
             certbot_bin=payload.get('certbot_bin', '/usr/bin/certbot'),
             acme_webroot=payload.get('acme_webroot', '/var/www/html'),
             certbot_live_root=payload.get('certbot_live_root', '/etc/letsencrypt/live'),
+            management_host=payload.get('management_host', '192.0.2.15'),
+            management_port=payload.get('management_port', 7444),
+            management_https_port=payload.get('management_https_port', 7445),
         )
         result = worker.dispatch(payload['operation'], payload.get('data', {}))
         print(json.dumps({'ok': True, 'result': result}, ensure_ascii=True))

@@ -1,3 +1,4 @@
+from urllib.parse import urlencode
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -5,7 +6,7 @@ from django.test import Client, TestCase
 
 import pyotp
 
-from .models import AuditEvent, TwoFactorCredential
+from .models import AuditEvent, Server, TwoFactorCredential
 from .two_factor import generate_totp_secret, provisioning_uri
 
 
@@ -20,6 +21,7 @@ class AuthenticationTests(TestCase):
     def test_login_password_change_logout(self):
         response = self.client.post('/login/', {'username': 'admin', 'password': '12345'})
         self.assertEqual(response.status_code, 302)
+        self.assertLessEqual(self.client.session.get_expiry_age(), 24 * 60 * 60)
         response = self.client.post('/api/password/', {'old_password': '12345', 'new_password1': 'Different-secure-pass!42', 'new_password2': 'Different-secure-pass!42'}, content_type='application/json')
         self.assertEqual(response.status_code, 200)
         self.assertTrue(AuditEvent.objects.filter(action='password_change').exists())
@@ -113,11 +115,49 @@ class AuthenticationTests(TestCase):
         response = self.client.get('/api/settings/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['log_retention_days'], 30)
+        self.assertEqual(response.json()['session_timeout_hours'], 24)
         response = self.client.post('/api/settings/', {'log_retention_days': 45}, content_type='application/json')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get('/api/settings/').json()['log_retention_days'], 45)
         response = self.client.post('/api/settings/', {'log_retention_days': 0}, content_type='application/json')
         self.assertEqual(response.status_code, 400)
+
+    def test_traffic_maintenance_path_and_state_are_server_scoped(self):
+        self.client.force_login(self.user)
+        server = Server.objects.get(pk='local')
+        manager = __import__('unittest').mock.Mock()
+        manager.validate_traffic_maintenance_page.return_value = '/var/www/custom.html'
+        manager.set_traffic_maintenance.return_value = {'message': 'Блокировка включена.', 'files': 3, 'excluded_management_hosts': ['panel.test']}
+        with patch('panel.views.manager_for', return_value=manager):
+            response = self.client.get('/api/traffic-maintenance/', {'server': 'local'})
+            self.assertEqual(response.json(), {'enabled': False, 'page_path': '/var/www/html/maitenance.html'})
+            url = '/api/traffic-maintenance/?' + urlencode({'server': 'local', 'server_revision': server.updated_at.isoformat()})
+            response = self.client.post(url, {'action': 'set_page', 'page_path': '/var/www/custom.html'}, content_type='application/json')
+            self.assertEqual(response.status_code, 200, response.content)
+            server.refresh_from_db()
+            self.assertEqual(server.maintenance_page_path, '/var/www/custom.html')
+            original_revision = server.updated_at.isoformat()
+            url = '/api/traffic-maintenance/?' + urlencode({'server': 'local', 'server_revision': server.updated_at.isoformat()})
+            response = self.client.post(url, {'action': 'toggle', 'enabled': True}, content_type='application/json')
+            self.assertEqual(response.status_code, 200, response.content)
+            server.refresh_from_db()
+            self.assertTrue(server.traffic_blocked)
+            self.assertEqual(server.updated_at.isoformat(), original_revision)
+            response = self.client.post(url, {'action': 'toggle', 'enabled': False}, content_type='application/json')
+            self.assertEqual(response.status_code, 200, response.content)
+            server.refresh_from_db()
+            self.assertFalse(server.traffic_blocked)
+
+    def test_session_timeout_hours_are_validated_and_apply_to_current_session(self):
+        self.client.force_login(self.user)
+        response = self.client.post('/api/settings/', {'session_timeout_hours': 36}, content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get('/api/settings/').json()['session_timeout_hours'], 36)
+        self.assertLessEqual(self.client.session.get_expiry_age(), 36 * 60 * 60)
+        for invalid in [0, 721, True, 1.5]:
+            with self.subTest(invalid=invalid):
+                response = self.client.post('/api/settings/', {'session_timeout_hours': invalid}, content_type='application/json')
+                self.assertEqual(response.status_code, 400)
 
     def test_service_requires_post_and_explicit_confirmation(self):
         self.client.force_login(self.user)

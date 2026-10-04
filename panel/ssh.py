@@ -80,6 +80,9 @@ class SSHManager:
                 'certbot_bin': settings.SNC_CERTBOT_BIN,
                 'acme_webroot': str(settings.SNC_ACME_WEBROOT),
                 'certbot_live_root': str(settings.SNC_CERTBOT_LIVE_ROOT),
+                'management_host': settings.SNC_SERVER,
+                'management_port': settings.SNC_PORT,
+                'management_https_port': int(settings.SNC_PORT) + 1,
                 'operation': operation,
                 'data': data or {},
             }, ensure_ascii=True))
@@ -162,6 +165,12 @@ class SSHManager:
         if action not in {'test', 'reload', 'restart'}:
             raise OperationError('Неизвестное действие.')
         return self.rpc(action)
+
+    def validate_traffic_maintenance_page(self, page_path):
+        return self.rpc('validate_traffic_maintenance_page', {'page_path': page_path})['path']
+
+    def set_traffic_maintenance(self, enabled, page_path):
+        return self.rpc('traffic_maintenance', {'enabled': enabled, 'page_path': page_path})
 
     def logs(self, identifier='', kind='access', lines=150):
         if kind not in {'access', 'error'}:

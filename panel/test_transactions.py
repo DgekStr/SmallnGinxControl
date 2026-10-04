@@ -1,10 +1,11 @@
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from panel.transactions import OperationError, access_log_traffic_totals, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, ensure_traffic_log_format, issue_webroot_certificate, validate_certificate_request
+from panel.transactions import OperationError, access_log_traffic_totals, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, ensure_global_maintenance_include, ensure_traffic_log_format, issue_webroot_certificate, render_global_maintenance_snippet, set_global_traffic_block, validate_certificate_request
 
 
 class TransactionTests(unittest.TestCase):
@@ -79,6 +80,59 @@ class TransactionTests(unittest.TestCase):
         repeated, changed_again = ensure_traffic_log_format(updated)
         self.assertFalse(changed_again)
         self.assertEqual(repeated, updated)
+
+    def test_global_maintenance_snippet_guards_traffic_and_uses_configured_page(self):
+        snippet = (
+            'proxy_intercept_errors on;\n'
+            'error_page 500 502 503 504 /maitenance.html;\n'
+            'location = /maitenance.html {\n root /var/www/html;\n internal;\n}\n'
+        )
+        with patch('panel.transactions.validate_maintenance_page_path', return_value='/srv/www/custom.html'):
+            updated = render_global_maintenance_snippet(snippet, '/srv/www/custom.html', '/etc/nginx/snippets/snc.flag').decode()
+        self.assertIn('if (-f /etc/nginx/snippets/snc.flag)', updated)
+        self.assertIn('if ($uri = /maitenance.html)', updated)
+        self.assertIn('alias /srv/www/custom.html;', updated)
+        self.assertNotIn('root /var/www/html;', updated)
+
+    def test_global_maintenance_include_covers_each_server_and_is_idempotent(self):
+        content = 'server { listen 80; server_name alpha.test; }\nserver { listen 443 ssl; server_name beta.test; }\n'
+        include = '/etc/nginx/snippets/maintenance_all.conf'
+        updated, changed = ensure_global_maintenance_include(content, include)
+        self.assertTrue(changed)
+        self.assertEqual(updated.decode().count('include ' + include + ';'), 2)
+        repeated, changed_again = ensure_global_maintenance_include(updated, include)
+        self.assertFalse(changed_again)
+        self.assertEqual(repeated, updated)
+
+    @unittest.skipUnless(os.name == 'posix', 'nginx global-maintenance paths use POSIX filesystem paths')
+    def test_global_traffic_block_and_unblock_restore_configs_exactly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'nginx'
+            snippet = root / 'snippets' / 'maintenance_all.conf'
+            config = root / 'conf.d' / 'site.conf'
+            page = root / 'www' / 'maitenance.html'
+            snippet.parent.mkdir(parents=True)
+            config.parent.mkdir(parents=True)
+            page.parent.mkdir(parents=True)
+            original_snippet = b'error_page 503 /maitenance.html;\nlocation = /maitenance.html { root /var/www/html; internal; }\n'
+            original_config = b'server { listen 80; server_name site.test; }\n'
+            snippet.write_bytes(original_snippet)
+            config.write_bytes(original_config)
+            page.write_text('<h1>Maintenance</h1>')
+            validate, reload_service = Mock(return_value='ok'), Mock()
+
+            blocked = set_global_traffic_block(root, root / 'state', page.as_posix(), True, [('conf.d/site.conf', config)], validate, reload_service)
+            self.assertTrue((root / 'snippets' / 'smallnginxcontrol-traffic-blocked.flag').is_file())
+            self.assertIn(b'include ' + snippet.as_posix().encode() + b';', config.read_bytes())
+            self.assertIn(b'alias ' + page.as_posix().encode() + b';', snippet.read_bytes())
+            self.assertEqual(blocked['files'], 2)
+
+            restored = set_global_traffic_block(root, root / 'state', page.as_posix(), False, [], validate, reload_service)
+            self.assertEqual(config.read_bytes(), original_config)
+            self.assertEqual(snippet.read_bytes(), original_snippet)
+            self.assertFalse((root / 'snippets' / 'smallnginxcontrol-traffic-blocked.flag').exists())
+            self.assertFalse((root / 'state' / 'global-traffic-maintenance').exists())
+            self.assertEqual(restored['message'], 'Доступ к хостам восстановлен.')
 
     def test_access_log_traffic_reports_download_and_upload_when_format_has_request_length(self):
         with tempfile.TemporaryDirectory() as directory:

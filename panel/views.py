@@ -28,6 +28,12 @@ def record(request, action, target='', success=True, detail='', server=None):
     AuditEvent.objects.create(server=server, actor=request.user.get_username() or 'anonymous', action=action, target=str(target)[:255], success=success, detail=str(detail)[:3000])
 
 
+def login_with_configured_timeout(request, user):
+    login(request, user)
+    timeout_hours = ServiceSetting.get_solo().session_timeout_hours
+    request.session.set_expiry(timeout_hours * 3600)
+
+
 def manage_servers(request, data):
     action = data.get('action')
     if action == 'probe':
@@ -115,7 +121,7 @@ def sign_in(request):
                 request.session.pop('two_factor_pending_user_id', None)
                 request.session.pop('two_factor_pending_username', None)
                 LoginAttempt.objects.filter(key__in=keys).delete()
-                login(request, user)
+                login_with_configured_timeout(request, user)
                 record(request, 'login')
                 return redirect('/')
             error, status = 'Неверный одноразовый код.', 401
@@ -134,7 +140,7 @@ def sign_in(request):
                         'server': settings.SNC_SERVER,
                     })
                 LoginAttempt.objects.filter(key__in=keys).delete()
-                login(request, user)
+                login_with_configured_timeout(request, user)
                 record(request, 'login')
                 return redirect('/')
             error, status = 'Неверный логин или пароль.', 401
@@ -183,12 +189,14 @@ def api(request, resource):
                 raise OperationError('Профиль сервера изменён или не подтверждён. Обновите страницу перед операцией.')
             manager = manager_for(server)
         if request.method == 'GET':
+            if resource == 'traffic-maintenance':
+                return JsonResponse({'enabled': server.traffic_blocked, 'page_path': server.maintenance_page_path})
             if resource == 'two-factor':
                 credential = TwoFactorCredential.objects.filter(user=request.user).first()
                 return JsonResponse({'enabled': bool(credential and credential.enabled)})
             if resource == 'settings':
                 service_settings = ServiceSetting.get_solo()
-                return JsonResponse({'log_retention_days': service_settings.log_retention_days})
+                return JsonResponse({'log_retention_days': service_settings.log_retention_days, 'session_timeout_hours': service_settings.session_timeout_hours})
             if resource == 'overview':
                 return JsonResponse({'server': server.host, 'server_id': server.pk, 'server_name': server.name, 'mode': server.mode, 'nginx': manager.status(), 'metrics': snapshot(server)})
             if resource == 'traffic':
@@ -210,7 +218,27 @@ def api(request, resource):
         if resource == 'servers':
             return JsonResponse(manage_servers(request, data))
         target = data.get('id', '')
-        if resource == 'two-factor':
+        if resource == 'traffic-maintenance':
+            action = data.get('action', '')
+            target = server.host
+            if action == 'set_page':
+                if server.traffic_blocked:
+                    raise OperationError('Сначала разблокируйте трафик, затем меняйте путь заглушки.')
+                page_path = manager.validate_traffic_maintenance_page(data.get('page_path', ''))
+                Server.objects.filter(pk=server.pk).update(maintenance_page_path=page_path)
+                server.maintenance_page_path = page_path
+                result = 'Путь к странице-заглушке сохранён.'
+            elif action == 'toggle':
+                enabled = data.get('enabled')
+                if type(enabled) is not bool:
+                    raise OperationError('Состояние блокировки должно быть true или false.')
+                result = manager.set_traffic_maintenance(enabled, server.maintenance_page_path)
+                Server.objects.filter(pk=server.pk).update(traffic_blocked=enabled)
+                server.traffic_blocked = enabled
+                action = 'traffic_block' if enabled else 'traffic_unblock'
+            else:
+                raise OperationError('Неизвестная операция блокировки трафика.')
+        elif resource == 'two-factor':
             action = data.get('action', '')
             target = request.user.get_username()
             credential, _ = TwoFactorCredential.objects.get_or_create(user=request.user)
@@ -282,14 +310,27 @@ def api(request, resource):
             result = 'Пароль изменён.'
         elif resource == 'settings':
             action = 'settings_update'
-            retention_days = data.get('log_retention_days')
-            if type(retention_days) is not int or not 1 <= retention_days <= 3650:
-                raise OperationError('Срок хранения должен быть целым числом от 1 до 3650 дней.')
             service_settings = ServiceSetting.get_solo()
-            service_settings.log_retention_days = retention_days
-            service_settings.save(update_fields=['log_retention_days', 'updated_at'])
-            target = 'log_retention_days'
-            result = 'Срок хранения журналов сохранён.'
+            updated_fields = []
+            if 'log_retention_days' in data:
+                retention_days = data['log_retention_days']
+                if type(retention_days) is not int or not 1 <= retention_days <= 3650:
+                    raise OperationError('Срок хранения должен быть целым числом от 1 до 3650 дней.')
+                service_settings.log_retention_days = retention_days
+                updated_fields.append('log_retention_days')
+            if 'session_timeout_hours' in data:
+                timeout_hours = data['session_timeout_hours']
+                if type(timeout_hours) is not int or not 1 <= timeout_hours <= 720:
+                    raise OperationError('Срок admin-сессии должен быть целым числом от 1 до 720 часов.')
+                service_settings.session_timeout_hours = timeout_hours
+                updated_fields.append('session_timeout_hours')
+            if not updated_fields:
+                raise OperationError('Укажите настройку для сохранения.')
+            service_settings.save(update_fields=[*updated_fields, 'updated_at'])
+            if 'session_timeout_hours' in updated_fields:
+                request.session.set_expiry(service_settings.session_timeout_hours * 3600)
+            target = ','.join(updated_fields)
+            result = 'Срок admin-сессии сохранён.' if updated_fields == ['session_timeout_hours'] else 'Срок хранения журналов сохранён.' if updated_fields == ['log_retention_days'] else 'Настройки сохранены.'
         else:
             return JsonResponse({'error': 'Неизвестный ресурс.'}, status=404)
         record(request, 'two_factor_' + action if resource == 'two-factor' else action, target, server=server)

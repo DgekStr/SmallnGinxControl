@@ -26,6 +26,8 @@ class Server(models.Model):
     nginx_root = models.CharField(max_length=500, default='/etc/nginx')
     log_root = models.CharField(max_length=500, default='/var/log/nginx')
     interface = models.CharField(max_length=64, blank=True)
+    traffic_blocked = models.BooleanField(default=False)
+    maintenance_page_path = models.CharField(max_length=1000, default='/var/www/html/maitenance.html')
     last_seen = models.DateTimeField(null=True, blank=True)
     last_error = models.CharField(max_length=500, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -109,6 +111,7 @@ class TwoFactorCredential(models.Model):
 class ServiceSetting(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     log_retention_days = models.PositiveSmallIntegerField(default=30, validators=[MinValueValidator(1), MaxValueValidator(3650)])
+    session_timeout_hours = models.PositiveSmallIntegerField(default=24, validators=[MinValueValidator(1), MaxValueValidator(720)])
     updated_at = models.DateTimeField(auto_now=True)
 
     @classmethod

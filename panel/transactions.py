@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+import json
 import math
 import os
 import re
@@ -23,6 +24,7 @@ MAINTENANCE_URI = '/__smallnginxcontrol_maintenance.html'
 ACCESS_LOG_BYTES_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:\s|$)')
 ACCESS_LOG_TRAFFIC_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:[ \t]+(\d+|-))?(?=[ \t"]|$)')
 TRAFFIC_LOG_FORMAT_NAME = 'smallnginxcontrol_traffic'
+GLOBAL_TRAFFIC_BLOCK_MARKER = '# smallnginxcontrol-global-traffic-block'
 TRAFFIC_LOG_FORMAT_DIRECTIVE = (
     '    log_format smallnginxcontrol_traffic \'$remote_addr - $remote_user [$time_local] '
     '"$request" $status $bytes_sent $request_length "$http_referer" "$http_user_agent"\';'
@@ -285,7 +287,182 @@ def ensure_traffic_log_format(content):
             insertion = '\n' + TRAFFIC_LOG_FORMAT_DIRECTIVE + '\n'
         updated = text[:insertion_position] + insertion + text[insertion_position:]
         return updated.encode('utf-8'), True
+
+
     raise OperationError('В nginx.conf не найден блок http для регистрации формата traffic log.')
+def validate_maintenance_page_path(candidate):
+    if not isinstance(candidate, str) or not re.fullmatch(r'/[A-Za-z0-9_./-]+', candidate) or '..' in Path(candidate).parts:
+        raise OperationError('Укажите абсолютный путь к HTML-файлу заглушки без пробелов и специальных символов.')
+    path = Path(candidate).resolve()
+    if not path.is_file():
+        raise OperationError(f'Файл заглушки не найден: {path}')
+    return path.as_posix()
+
+
+def ensure_global_maintenance_include(content, include_path):
+    text = content.decode('utf-8') if isinstance(content, bytes) else content
+    if not re.fullmatch(r'/[A-Za-z0-9_./-]+', include_path) or '..' in Path(include_path).parts:
+        raise OperationError('Недопустимый путь к nginx maintenance snippet.')
+    masked = _nginx_mask(text)
+    insertions = []
+    for server_match in re.finditer(r'(?<![\w-])server\s*\{', masked):
+        opening = masked.find('{', server_match.start(), server_match.end())
+        closing = _matching_brace(masked, opening, len(masked))
+        scopes = _nginx_block_scopes(masked, opening, closing)
+        included = False
+        for match in re.finditer(r'(?<![\w-])include\s+', masked[opening + 1:closing]):
+            position = opening + 1 + match.start()
+            scope = max((start for start, end in scopes.items() if start < position < end), default=opening)
+            if scope != opening:
+                continue
+            directive_end = opening + 1 + match.end()
+            semicolon = masked.find(';', directive_end, closing)
+            if semicolon < 0:
+                raise OperationError('Директива include не завершена точкой с запятой.')
+            try:
+                arguments = shlex.split(text[directive_end:semicolon], comments=False, posix=True)
+            except ValueError as error:
+                raise OperationError(f'Не удалось разобрать include: {error}') from error
+            if arguments == [include_path]:
+                included = True
+                break
+        if included:
+            continue
+        line_start = text.rfind('\n', 0, opening) + 1
+        server_indent = re.match(r'[ \t]*', text[line_start:opening]).group()
+        insertions.append((opening + 1, f'\n{server_indent}    include {include_path};'))
+    if not insertions:
+        return text.encode('utf-8'), False
+    for position, insertion in sorted(insertions, reverse=True):
+        text = text[:position] + insertion + text[position:]
+    return text.encode('utf-8'), True
+
+
+def render_global_maintenance_snippet(content, page_path, flag_path):
+    text = content.decode('utf-8') if isinstance(content, bytes) else content
+    page_path = validate_maintenance_page_path(page_path)
+    flag_path = str(flag_path)
+    if not re.fullmatch(r'/[A-Za-z0-9_./-]+', flag_path) or '..' in Path(flag_path).parts:
+        raise OperationError('Недопустимый marker path для блокировки трафика.')
+    if GLOBAL_TRAFFIC_BLOCK_MARKER in text:
+        raise OperationError('Maintenance snippet уже содержит marker блокировки.')
+
+    masked = _nginx_mask(text)
+    location = re.search(r'(?<![\w-])location\s*=\s*/maitenance\.html\s*\{', masked)
+    if not location:
+        raise OperationError('В maintenance snippet отсутствует location для maitenance.html.')
+    opening = masked.find('{', location.start(), location.end())
+    closing = _matching_brace(masked, opening, len(masked))
+    scopes = _nginx_block_scopes(masked, opening, closing)
+    path_span = None
+    directive_span = None
+    for match in re.finditer(r'(?<![\w-])(?:root|alias)\s+', masked[opening + 1:closing]):
+        position = opening + 1 + match.start()
+        if max((start for start, end in scopes.items() if start < position < end), default=opening) != opening:
+            continue
+        directive_end = opening + 1 + match.end()
+        semicolon = masked.find(';', directive_end, closing)
+        if semicolon < 0:
+            raise OperationError('Директива root/alias заглушки не завершена точкой с запятой.')
+        arg_start, arg_end, _ = _argument_span(text, directive_end, semicolon)
+        path_span = (arg_start, arg_end)
+        directive_start = opening + 1 + match.start()
+        directive_name = match.group(0).strip().split()[0]
+        directive_span = (directive_start, directive_start + len(directive_name))
+        break
+    if path_span is None or directive_span is None:
+        raise OperationError('В maintenance location отсутствует root/alias path.')
+    text = text[:path_span[0]] + page_path + text[path_span[1]:]
+    text = text[:directive_span[0]] + 'alias' + text[directive_span[1]:]
+
+    guard = (
+        f'{GLOBAL_TRAFFIC_BLOCK_MARKER}: begin\n'
+        'set $smallnginxcontrol_traffic_blocked 0;\n'
+        f'if (-f {flag_path}) {{\n'
+        '    set $smallnginxcontrol_traffic_blocked 1;\n'
+        '}\n'
+        'if ($uri = /maitenance.html) {\n'
+        '    set $smallnginxcontrol_traffic_blocked 0;\n'
+        '}\n'
+        'if ($smallnginxcontrol_traffic_blocked) {\n'
+        '    return 503;\n'
+        '}\n'
+        f'{GLOBAL_TRAFFIC_BLOCK_MARKER}: end\n'
+    )
+    return (guard + text).encode('utf-8')
+
+
+def set_global_traffic_block(config_root, state_root, page_path, enabled, config_files, validate, reload_service):
+    if type(enabled) is not bool:
+        raise OperationError('Состояние блокировки должно быть true или false.')
+    root = Path(config_root).resolve()
+    backup_root = Path(state_root) / 'global-traffic-maintenance'
+    manifest_path = backup_root / 'manifest.json'
+    snippet_path = root / 'snippets' / 'maintenance_all.conf'
+    flag_path = root / 'snippets' / 'smallnginxcontrol-traffic-blocked.flag'
+
+    if enabled:
+        validate_maintenance_page_path(page_path)
+        if manifest_path.exists() or flag_path.exists():
+            raise OperationError('Глобальная блокировка уже активна или требует ручного восстановления.')
+        if not snippet_path.is_file():
+            raise OperationError(f'Общий nginx maintenance snippet не найден: {snippet_path}')
+        originals, updated = {}, {}
+        snippet_original = snippet_path.read_bytes()
+        originals[snippet_path] = snippet_original
+        updated[snippet_path] = render_global_maintenance_snippet(snippet_original, page_path, flag_path.as_posix())
+        for identifier, candidate in config_files:
+            path = Path(candidate)
+            original = path.read_bytes()
+            changed, was_updated = ensure_global_maintenance_include(original, snippet_path.as_posix())
+            if was_updated:
+                originals[path] = original
+                updated[path] = changed
+        backup_root.mkdir(parents=True, mode=0o700)
+        manifest = {}
+        for index, (path, content) in enumerate(originals.items()):
+            name = f'{index:04d}.bak'
+            atomic_write(backup_root / name, content)
+            manifest[str(path)] = name
+        atomic_write(manifest_path, json.dumps(manifest, sort_keys=True).encode('utf-8'))
+
+        def change():
+            for path, content in updated.items():
+                atomic_write(path, content)
+            atomic_write(flag_path, b'blocked\n')
+            os.chmod(flag_path, 0o644)
+
+        def rollback():
+            for path, content in originals.items():
+                atomic_write(path, content)
+            flag_path.unlink(missing_ok=True)
+            shutil.rmtree(backup_root, ignore_errors=True)
+
+        result = apply_transaction(change, rollback, validate, reload_service)
+        return {'message': 'Трафик заблокирован; nginx показывает страницу-заглушку.', 'files': len(updated), 'result': result}
+
+    if not manifest_path.is_file():
+        if flag_path.exists():
+            raise OperationError('Marker глобальной блокировки найден без backup manifest; требуется ручное восстановление.')
+        return {'message': 'Блокировка трафика уже выключена.', 'files': 0}
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    originals = {Path(path): (backup_root / name).read_bytes() for path, name in manifest.items()}
+    frozen = {path: path.read_bytes() for path in originals}
+
+    def restore():
+        for path, content in originals.items():
+            atomic_write(path, content)
+        flag_path.unlink(missing_ok=True)
+
+    def reapply():
+        for path, content in frozen.items():
+            atomic_write(path, content)
+        atomic_write(flag_path, b'blocked\n')
+        os.chmod(flag_path, 0o644)
+
+    result = apply_transaction(restore, reapply, validate, reload_service)
+    shutil.rmtree(backup_root)
+    return {'message': 'Доступ к хостам восстановлен.', 'files': len(originals), 'result': result}
 
 
 def _argument_span(content, start, limit):

@@ -353,7 +353,19 @@ test('switching server clears previous SSD usage while new metrics load', async 
 test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
+  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(4);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов']);
+  await expect(page.locator('#traffic-maintenance-status')).toHaveText('Работает');
+  await expect(page.locator('#traffic-maintenance-path')).toHaveText('/var/www/html/maitenance.html');
+  await expect(page.locator('#traffic-maintenance-toggle')).toBeDisabled();
+  await expect(page.locator('#password-form')).toBeVisible();
   await expect(page.locator('#log-retention-days')).toHaveValue('30');
+  await expect(page.locator('#traffic-maintenance-status')).toHaveText('Работает');
+  await expect(page.locator('#traffic-maintenance-toggle')).toBeDisabled();
+  await expect(page.locator('#session-timeout-hours')).toHaveValue('24');
+  await page.locator('#session-timeout-hours').fill('36');
+  await page.locator('#session-timeout-form button[type="submit"]').click();
+  await expect(page.locator('#session-timeout-result')).toContainText('Срок admin-сессии сохранён');
   await page.locator('#log-retention-days').fill('45');
   await page.locator('#log-retention-form button[type="submit"]').click();
   await expect(page.locator('#log-retention-result')).toContainText('Срок хранения журналов сохранён');

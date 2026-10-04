@@ -8,6 +8,7 @@ const number = (value, digits = 1) => Number(value || 0).toLocaleString('ru-RU',
 const time = (value) => new Date(value).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access', overview: null, trafficTop: [], trafficFetchedAt: 0, config: null, editor: null, charts: {}, busy: false, polling: false, logContent: '', logSources: []};
 let twoFactorEnabled = false;
+let trafficBlocked = false;
 Object.assign(state, {servers: [], serverId: sessionStorage.getItem('snc-server') || 'local', serverRevision: null, generation: 0, switching: false, serverReady: false, inventoryLoaded: false, editingServer: null});
 const titles = {
   servers: ['Серверы nginx', 'NGINX / SERVER CONNECTIONS', 'Серверы'],
@@ -211,8 +212,6 @@ function renderMetrics() {
   const result = state.overview;
   if (!result) return;
   const metrics = result.metrics;
-  query('#nginx-version').textContent = result.nginx.version;
-  query('#system-name').textContent = result.nginx.system;
   query('#health-badge').textContent = result.nginx.active ? 'Работает' : 'Остановлен';
   query('#health-badge').className = 'badge ' + (result.nginx.active ? 'success' : 'error');
   query('#connection-label').innerHTML = `<span class="status-dot ${metrics.stale ? 'off' : ''}"></span>${metrics.stale ? 'Нет свежих метрик' : result.mode === 'demo' ? 'Локальная среда' : 'Сервер доступен'}`;
@@ -321,6 +320,22 @@ function ensureLogRetentionForm() {
   icons();
 }
 
+function ensureSessionTimeoutForm() {
+  if (query('#session-timeout-form')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section session-timeout-section';
+  section.innerHTML = '<div class="section-heading"><h2>Сессия администратора</h2><i data-lucide="timer"></i></div><form id="session-timeout-form"><label>Длительность, часов<input id="session-timeout-hours" name="session_timeout_hours" type="number" min="1" max="720" step="1" required></label><p class="muted small">Применяется к этой сессии сразу и к последующим входам.</p><div id="session-timeout-result" class="operation-result" hidden></div><button class="button primary" type="submit"><i data-lucide="save"></i>Сохранить срок</button></form>';
+  query('#view-settings .settings-layout').append(section);
+  section.querySelector('#session-timeout-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const result = await request('settings', {session_timeout_hours: Number(query('#session-timeout-hours').value)});
+      showResult('#session-timeout-result', result.message, true);
+    }, '#session-timeout-result');
+  });
+  icons();
+}
+
 async function refreshLogRetentionSettings() {
   ensureLogRetentionForm();
   const result = await request('settings');
@@ -328,12 +343,71 @@ async function refreshLogRetentionSettings() {
   query('#log-retention-result').hidden = true;
 }
 
+async function refreshSessionTimeoutSettings() {
+  ensureSessionTimeoutForm();
+  const result = await request('settings');
+  query('#session-timeout-hours').value = result.session_timeout_hours;
+  query('#session-timeout-result').hidden = true;
+}
+
 function ensureTwoFactorSettings() {
   if (query('#two-factor-toggle')) return;
+  const layout = query('#view-settings .settings-layout');
+  const accountSection = query('#password-form')?.closest('.settings-section');
+  const accountIdentity = accountSection?.querySelector('.settings-identity');
+  const passwordForm = query('#password-form');
   const section = document.createElement('section');
   section.className = 'settings-section two-factor-settings';
   section.innerHTML = '<div class="section-heading"><h2>Двухфакторная защита</h2><i data-lucide="shield-check" class="text-cyan"></i></div><div class="settings-details"><div><dt>Статус</dt><dd id="two-factor-status">Загрузка</dd></div></div><p class="muted small">TOTP-коды Google Authenticator проверяются локально.</p><div id="two-factor-result" class="operation-result" hidden></div><button class="button" type="button" id="two-factor-toggle"><i data-lucide="scan-line"></i><span id="two-factor-toggle-label">Подключить 2FA</span></button>';
-  query('#view-settings .settings-layout').append(section);
+  layout.append(section);
+  if (accountIdentity) section.append(accountIdentity);
+  if (passwordForm) {
+    const passwordHeading = document.createElement('h3');
+    passwordHeading.className = 'two-factor-password-heading';
+    passwordHeading.textContent = 'Пароль учётной записи';
+    section.append(passwordHeading, passwordForm);
+  }
+  accountSection?.remove();
+  const restartSection = layout.querySelector('.settings-section');
+  const restartTitle = restartSection?.querySelector('.section-heading h2');
+  if (restartTitle) restartTitle.textContent = 'Перезапуск nginx';
+  restartSection?.querySelector('.danger-zone h3')?.remove();
+  restartSection?.classList.add('traffic-control-section');
+  const trafficControls = document.createElement('div');
+  trafficControls.className = 'traffic-maintenance-controls';
+  trafficControls.innerHTML = '<div class="traffic-maintenance-heading"><div><h3>Блокировка трафика</h3><p class="muted small">HTTP/HTTPS хосты покажут заглушку. Панель останется доступна для разблокировки; TCP stream не затрагивается.</p></div><span id="traffic-maintenance-status" class="badge neutral">Загрузка</span></div><div class="traffic-maintenance-path"><span>Файл заглушки</span><code id="traffic-maintenance-path">/var/www/html/maitenance.html</code><button class="button" type="button" id="traffic-maintenance-edit"><i data-lucide="file-pen"></i>Изменить</button></div><div id="traffic-maintenance-result" class="operation-result" hidden></div><button class="button danger" type="button" id="traffic-maintenance-toggle"><i data-lucide="shield-ban"></i><span id="traffic-maintenance-toggle-label">Блокировать трафик</span></button>';
+  restartSection?.append(trafficControls);
+  const pageDialog = document.createElement('dialog');
+  pageDialog.id = 'traffic-maintenance-dialog';
+  pageDialog.className = 'modal';
+  pageDialog.innerHTML = '<div class="modal-heading"><h2>Страница-заглушка</h2><button class="icon-button" type="button" data-close="traffic-maintenance-dialog" title="Закрыть" aria-label="Закрыть"><i data-lucide="x"></i></button></div><form id="traffic-maintenance-path-form"><label>Абсолютный путь на выбранном nginx-сервере<input id="traffic-maintenance-path-input" name="page_path" type="text" required placeholder="/var/www/html/maitenance.html"></label><p class="muted small">Файл должен существовать и быть доступен nginx. Смените путь перед блокировкой.</p><div id="traffic-maintenance-path-error" class="form-error" role="alert" hidden></div><div class="modal-footer"><button class="button" type="button" data-close="traffic-maintenance-dialog">Отмена</button><button class="button primary" type="submit"><i data-lucide="save"></i>Сохранить путь</button></div></form>';
+  document.body.append(pageDialog);
+  query('#traffic-maintenance-edit').addEventListener('click', () => {
+    query('#traffic-maintenance-path-input').value = query('#traffic-maintenance-path').textContent;
+    query('#traffic-maintenance-path-error').hidden = true;
+    pageDialog.showModal();
+  });
+  query('#traffic-maintenance-path-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const result = await request('traffic-maintenance', {action: 'set_page', page_path: query('#traffic-maintenance-path-input').value.trim()});
+      pageDialog.close();
+      showResult('#traffic-maintenance-result', result.message, true);
+      await refreshTrafficMaintenanceSettings();
+    }, '#traffic-maintenance-path-error');
+  });
+  query('#traffic-maintenance-toggle').addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+    const enabling = !trafficBlocked;
+    const description = enabling
+      ? 'Активные HTTP/HTTPS host и reverse proxy начнут показывать выбранную заглушку. Панель останется доступна для разблокировки; raw TCP stream не изменяется.'
+      : 'Исходные nginx-конфигурации будут восстановлены и доступ к сайтам вернётся.';
+    if (!await confirmAction(enabling ? 'Заблокировать веб-трафик?' : 'Разблокировать веб-трафик?', description, enabling)) return;
+    const result = await request('traffic-maintenance', {action: 'toggle', enabled: enabling});
+    trafficBlocked = enabling;
+    toast(result.message);
+    await refreshTrafficMaintenanceSettings();
+  }, '#traffic-maintenance-result'));
+  icons();
 
   const dialog = document.createElement('dialog');
   dialog.id = 'two-factor-dialog';
@@ -404,6 +478,19 @@ async function refreshTwoFactorSettings() {
   query('#two-factor-result').hidden = true;
 }
 
+async function refreshTrafficMaintenanceSettings() {
+  ensureTwoFactorSettings();
+  const result = await request('traffic-maintenance');
+  trafficBlocked = result.enabled;
+  query('#traffic-maintenance-path').textContent = result.page_path;
+  query('#traffic-maintenance-status').textContent = trafficBlocked ? 'Заблокирован' : 'Работает';
+  query('#traffic-maintenance-status').className = 'badge ' + (trafficBlocked ? 'warning' : 'success');
+  query('#traffic-maintenance-toggle-label').textContent = trafficBlocked ? 'Разблокировать трафик' : 'Блокировать трафик';
+  const readOnly = document.body.dataset.mode === 'demo';
+  query('#traffic-maintenance-toggle').disabled = readOnly;
+  query('#traffic-maintenance-edit').disabled = readOnly || trafficBlocked;
+}
+
 async function refreshOverview() {
   state.overview = await request('overview');
   state.serverReady = state.inventoryLoaded;
@@ -438,7 +525,14 @@ async function route() {
     if (next === 'logs') await loadLogs();
     if (next === 'config') await loadConfig();
     if (next === 'audit') await loadAudit();
-    if (next === 'settings') await Promise.all([refreshLogRetentionSettings(), refreshTwoFactorSettings()]);
+    if (next === 'settings') {
+      await refreshTwoFactorSettings();
+      await refreshSessionTimeoutSettings();
+      await refreshLogRetentionSettings();
+      await refreshTrafficMaintenanceSettings();
+      const layout = query('#view-settings .settings-layout');
+      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'));
+    }
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }
 
