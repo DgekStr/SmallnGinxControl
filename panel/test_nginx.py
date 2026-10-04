@@ -1,0 +1,120 @@
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+from django.test import SimpleTestCase, override_settings
+
+from .nginx import NginxManager
+from .transactions import OperationError, render_maintenance_config
+
+
+class NginxTests(SimpleTestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        (root / 'conf.d').mkdir()
+        (root / 'sites-available').mkdir()
+        (root / 'sites-enabled').mkdir()
+        (root / 'logs').mkdir()
+        self.maintenance_root = root / 'maintenance'
+        self.maintenance_root.mkdir()
+        (self.maintenance_root / 'maitenance.html').write_text('maintenance')
+        (root / 'nginx.conf').write_text('events {}\nhttp {}\n')
+        self.override = override_settings(NGINX_ROOT=root, NGINX_LOG_ROOT=root / 'logs', STATE_DIR=root, SNC_MODE='demo')
+        self.override.enable()
+        self.addCleanup(self.override.disable)
+        self.manager = NginxManager(maintenance_root=self.maintenance_root)
+
+    def test_create_inventory_disable_enable(self):
+        self.manager.create({'name': 'example.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        self.assertEqual(item['kind'], 'proxy')
+        self.assertTrue(item['enabled'])
+        original = self.manager.read(item['id'])['content'].encode()
+        self.manager.toggle(item['id'], False, item['revision'])
+        item = self.manager.inventory()['items'][0]
+        self.assertFalse(item['enabled'])
+        self.assertTrue(item['maintenance'])
+        self.assertIn('return 503;', self.manager.read(item['id'])['content'])
+        self.assertEqual(self.manager.maintenance_backup(item['id']).read_bytes(), original)
+        self.manager.toggle(item['id'], True, item['revision'])
+        item = self.manager.inventory()['items'][0]
+        self.assertTrue(item['enabled'])
+        self.assertFalse(item['maintenance'])
+        self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
+        self.assertFalse(self.manager.maintenance_backup(item['id']).exists())
+
+    def test_static_host_uses_legacy_disable(self):
+        self.manager.create({'name': 'static.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        self.manager.toggle(item['id'], False, item['revision'])
+        item = self.manager.inventory()['items'][0]
+        self.assertFalse(item['enabled'])
+        self.assertFalse(item['maintenance'])
+        self.assertTrue((self.manager.root / 'conf.d' / 'static.test.conf.disabled').is_file())
+
+    def test_proxy_maintenance_requires_page(self):
+        self.manager.create({'name': 'missing.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        self.maintenance_page = self.maintenance_root / 'maitenance.html'
+        self.maintenance_page.unlink()
+        with self.assertRaisesRegex(OperationError, 'Страница обслуживания'):
+            self.manager.toggle(item['id'], False, item['revision'])
+        self.assertTrue(self.manager.inventory()['items'][0]['enabled'])
+
+    def test_proxy_maintenance_reuses_existing_handler(self):
+        content = (
+            'server {\n'
+            '    include /etc/nginx/snippets/maintenance_all.conf;\n'
+            '    server_name proxy.test;\n'
+            '    location / { proxy_pass http://127.0.0.1:3000; }\n'
+            '}\n'
+        )
+        rendered = render_maintenance_config(content, self.maintenance_root).decode()
+        self.assertIn('if ($uri != /maitenance.html)', rendered)
+        self.assertNotIn('/__smallnginxcontrol_maintenance.html', rendered)
+
+    def test_save_conflict_and_rollback(self):
+        config = self.manager.read('nginx.conf')
+        with self.assertRaisesRegex(OperationError, 'уже изменён'):
+            self.manager.save('nginx.conf', 'events {}', 'stale')
+        with patch.object(self.manager, 'validate', side_effect=OperationError('nginx -t failed')):
+            with self.assertRaises(OperationError):
+                self.manager.save('nginx.conf', 'events {}', config['revision'])
+        self.assertEqual(self.manager.read('nginx.conf')['content'], config['content'])
+
+    def test_two_servers_keep_identical_host_names_isolated(self):
+        other_root = self.manager.root / 'second-server'
+        other_root.mkdir()
+        (other_root / 'conf.d').mkdir()
+        (other_root / 'nginx.conf').write_text('events {}\nhttp {}\n')
+        other = NginxManager(root=other_root, logs_root=other_root / 'logs', state=other_root, demo=True)
+        data = {'name': 'shared.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000'}
+        self.manager.create(data)
+        other.create(data)
+        item = self.manager.inventory()['items'][0]
+        self.manager.toggle(item['id'], False, item['revision'])
+        self.assertFalse(self.manager.inventory()['items'][0]['enabled'])
+        self.assertTrue(other.inventory()['items'][0]['enabled'])
+        self.assertNotEqual(self.manager.state, other.state)
+
+    def test_path_traversal_is_blocked(self):
+        for identifier in ['../secret', '/etc/passwd', 'conf.d/../../secret', '.secret', 'conf.d\\secret']:
+            with self.subTest(identifier=identifier), self.assertRaises(OperationError):
+                self.manager.read(identifier)
+
+    def test_directive_injection_is_blocked(self):
+        for target in ['http://localhost;include /etc/passwd', 'http://localhost/\n}', 'http://user:pass@localhost', 'file:///etc/passwd']:
+            with self.subTest(target=target), self.assertRaises(OperationError):
+                self.manager.create({'name': 'test.local', 'kind': 'proxy', 'target': target})
+
+    def test_logs_are_bounded_and_confined(self):
+        path = self.manager.logs_root / 'access.log'
+        path.write_text('\n'.join(str(number) for number in range(1000)))
+        log = self.manager.logs(lines=10)['content']
+        self.assertIn('999', log)
+        self.assertNotIn('\n989\n', log)
+        config = self.manager.root / 'conf.d' / 'unsafe.conf'
+        config.write_text('server { access_log /etc/passwd; }')
+        self.assertIn('вне разрешённого', self.manager.logs('conf.d/unsafe.conf')['content'])

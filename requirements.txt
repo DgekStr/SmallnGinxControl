@@ -1,0 +1,8 @@
+Django>=5.2.8,<5.3
+psutil>=7.0,<8
+crossplane>=0.5.8,<0.6
+portalocker>=3.2,<4
+waitress>=3.0.2,<4
+whitenoise>=6.9,<7
+paramiko>=4.0,<5
+cryptography>=46,<49

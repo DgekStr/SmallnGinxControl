@@ -1,0 +1,21 @@
+[Unit]
+Description=SmallnGinxControl administrative panel
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/smallnginxcontrol
+EnvironmentFile=/etc/smallnginxcontrol.env
+ExecStart=/opt/smallnginxcontrol/.venv/bin/python /opt/smallnginxcontrol/serve.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+StateDirectory=smallnginxcontrol
+StateDirectoryMode=0700
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

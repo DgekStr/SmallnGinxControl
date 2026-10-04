@@ -1,0 +1,30 @@
+{% load static %}
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Вход | SmallnGinxControl</title>
+  <link rel="icon" href="{% static 'brand.png' %}">
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="{% static 'vendor/lucide.js' %}" defer></script>
+  <script src="{% static 'login.js' %}" defer></script>
+</head>
+<body class="login-page">
+  <header class="login-header"><a class="brand" href="/"><img src="{% static 'brand.png' %}" alt=""><span>SmallnGinx<span class="brand-sub">Control</span></span></a><span class="muted small">FOCUSLENS / INFRASTRUCTURE</span></header>
+  <main class="login-main">
+    <div class="login-heading"><span class="eyebrow">NGINX CONTROL PANEL</span><h1>Всё под контролем.</h1><p class="muted mono">{{ server }} <span class="text-cyan">/</span> :7444</p></div>
+    <form method="post" class="login-form">
+      {% csrf_token %}
+      <h2>Вход в панель</h2>
+      {% if demo %}<div class="login-demo"><i data-lucide="flask-conical"></i>Локальная демосреда</div>{% endif %}
+      {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+      <label>Логин<input name="username" autocomplete="username" required autofocus placeholder="admin" maxlength="150"></label>
+      <label>Пароль<span class="password-input"><input name="password" type="password" autocomplete="current-password" required placeholder="Введите пароль"><button class="icon-button" type="button" id="reveal-password" title="Показать пароль" aria-label="Показать пароль"><i data-lucide="eye"></i></button></span></label>
+      <button type="submit" class="button primary login-submit">Войти <i data-lucide="arrow-right"></i></button>
+      <div class="login-secure"><i data-lucide="shield-check"></i>Защищённая административная сессия</div>
+    </form>
+  </main>
+  <footer class="login-footer"><span>SmallnGinxControl <span class="muted">/ v1.0.0</span></span><span class="muted">FOCUSLENS.DEV</span></footer>
+</body>
+</html>

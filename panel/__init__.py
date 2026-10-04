@@ -1,0 +1,1 @@
+"""SmallnGinxControl application package."""

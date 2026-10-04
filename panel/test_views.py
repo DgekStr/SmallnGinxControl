@@ -1,0 +1,50 @@
+from django.contrib.auth import get_user_model
+from django.test import Client, TestCase
+
+from .models import AuditEvent
+
+
+class AuthenticationTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('admin', password='12345', is_staff=True)
+
+    def test_authentication_required(self):
+        self.assertEqual(self.client.get('/').status_code, 302)
+        self.assertEqual(self.client.get('/api/hosts/').status_code, 401)
+
+    def test_login_password_change_logout(self):
+        response = self.client.post('/login/', {'username': 'admin', 'password': '12345'})
+        self.assertEqual(response.status_code, 302)
+        response = self.client.post('/api/password/', {'old_password': '12345', 'new_password1': 'Different-secure-pass!42', 'new_password2': 'Different-secure-pass!42'}, content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(AuditEvent.objects.filter(action='password_change').exists())
+        self.assertEqual(self.client.post('/logout/').status_code, 302)
+        self.assertFalse(self.client.login(username='admin', password='12345'))
+        self.assertTrue(self.client.login(username='admin', password='Different-secure-pass!42'))
+
+    def test_weak_password_rejected(self):
+        self.client.force_login(self.user)
+        response = self.client.post('/api/password/', {'old_password': '12345', 'new_password1': '12345', 'new_password2': '12345'}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_csrf_is_enforced(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        self.assertEqual(client.post('/api/service/', {'action': 'restart'}, content_type='application/json').status_code, 403)
+
+    def test_non_staff_is_rejected(self):
+        user = get_user_model().objects.create_user('viewer', password='test')
+        self.client.force_login(user)
+        self.assertEqual(self.client.get('/api/hosts/').status_code, 403)
+
+    def test_service_requires_post_and_explicit_confirmation(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get('/api/service/').status_code, 404)
+        response = self.client.post('/api/service/', {'action': 'restart'}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_login_rate_limit(self):
+        for attempt in range(5):
+            self.client.post('/login/', {'username': 'admin', 'password': 'wrong'})
+        response = self.client.post('/login/', {'username': 'admin', 'password': '12345'})
+        self.assertEqual(response.status_code, 429)
