@@ -21,6 +21,12 @@ class OperationError(Exception):
 MAINTENANCE_MARKER = '# smallnginxcontrol-maintenance'
 MAINTENANCE_URI = '/__smallnginxcontrol_maintenance.html'
 ACCESS_LOG_BYTES_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:\s|$)')
+ACCESS_LOG_TRAFFIC_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:[ \t]+(\d+|-))?(?=[ \t"]|$)')
+TRAFFIC_LOG_FORMAT_NAME = 'smallnginxcontrol_traffic'
+TRAFFIC_LOG_FORMAT_DIRECTIVE = (
+    '    log_format smallnginxcontrol_traffic \'$remote_addr - $remote_user [$time_local] '
+    '"$request" $status $bytes_sent $request_length "$http_referer" "$http_user_agent"\';'
+)
 DNS_LABEL = re.compile(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
 EMAIL_ADDRESS = re.compile(r'^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$')
 
@@ -117,6 +123,57 @@ def access_log_traffic_bytes(candidate, roots, sample_size=128 * 1024):
     return sum(int(match.group(1)) for match in ACCESS_LOG_BYTES_PATTERN.finditer(content) if match.group(1) != b'-')
 
 
+def access_log_traffic_stats(candidate, roots, sample_size=128 * 1024):
+    if not is_allowed_log_path(candidate, roots):
+        return {'downloaded_bytes': 0, 'uploaded_bytes': None, 'uploaded_complete': False, 'has_data': False}
+    path = Path(candidate)
+    try:
+        if not path.is_file():
+            return {'downloaded_bytes': 0, 'uploaded_bytes': None, 'uploaded_complete': False, 'has_data': False}
+        with path.open('rb') as stream:
+            stream.seek(max(0, path.stat().st_size - sample_size))
+            content = stream.read(sample_size)
+    except OSError:
+        return {'downloaded_bytes': 0, 'uploaded_bytes': None, 'uploaded_complete': False, 'has_data': False}
+    if not content:
+        return {'downloaded_bytes': 0, 'uploaded_bytes': None, 'uploaded_complete': False, 'has_data': False}
+    downloaded = uploaded = records = upload_records = 0
+    upload_complete = True
+    lines = [line for line in content.splitlines() if line]
+    for line in lines:
+        match = ACCESS_LOG_TRAFFIC_PATTERN.search(line)
+        if not match:
+            upload_complete = False
+            continue
+        records += 1
+        sent = match.group(1)
+        if sent != b'-':
+            downloaded += int(sent)
+        request_size = match.group(2)
+        if request_size is None or request_size == b'-':
+            upload_complete = False
+        else:
+            uploaded += int(request_size)
+            upload_records += 1
+    return {
+        'downloaded_bytes': downloaded,
+        'uploaded_bytes': uploaded if upload_records else None,
+        'uploaded_complete': bool(records) and upload_complete and upload_records == len(lines),
+        'has_data': bool(lines),
+    }
+
+
+def access_log_traffic_totals(candidates, roots, sample_size=128 * 1024):
+    stats = [access_log_traffic_stats(path, roots, sample_size) for path in dict.fromkeys(candidates)]
+    data = [item for item in stats if item['has_data']]
+    upload_data = [item for item in data if item['uploaded_bytes'] is not None]
+    return {
+        'downloaded_bytes': sum(item['downloaded_bytes'] for item in stats),
+        'uploaded_bytes': sum(item['uploaded_bytes'] for item in upload_data) if upload_data else None,
+        'uploaded_complete': bool(data) and all(item['uploaded_complete'] for item in data),
+    }
+
+
 @lru_cache(maxsize=512)
 def _certificate_expiry_timestamp(path, mtime_ns):
     openssl = shutil.which('openssl') or '/usr/bin/openssl'
@@ -200,6 +257,35 @@ def _matching_brace(masked, opening, limit):
             if depth == 0:
                 return index
     raise OperationError('В nginx-конфигурации не закрыт блок server.')
+
+
+def ensure_traffic_log_format(content):
+    text = content.decode('utf-8') if isinstance(content, bytes) else content
+    masked = _nginx_mask(text)
+    for match in re.finditer(r'(?<![\w-])http\s*\{', masked):
+        depth = 0
+        for character in masked[:match.start()]:
+            if character == '{':
+                depth += 1
+            elif character == '}':
+                depth -= 1
+        if depth:
+            continue
+        opening = masked.find('{', match.start(), match.end())
+        closing = _matching_brace(masked, opening, len(masked))
+        block = masked[opening + 1:closing]
+        if re.search(r'(?m)^\s*log_format\s+' + re.escape(TRAFFIC_LOG_FORMAT_NAME) + r'\s', block):
+            return text.encode('utf-8'), False
+        line_break = text.find('\n', opening + 1, closing)
+        if line_break >= 0 and not text[opening + 1:line_break].strip():
+            insertion_position = line_break + 1
+            insertion = TRAFFIC_LOG_FORMAT_DIRECTIVE + '\n'
+        else:
+            insertion_position = opening + 1
+            insertion = '\n' + TRAFFIC_LOG_FORMAT_DIRECTIVE + '\n'
+        updated = text[:insertion_position] + insertion + text[insertion_position:]
+        return updated.encode('utf-8'), True
+    raise OperationError('В nginx.conf не найден блок http для регистрации формата traffic log.')
 
 
 def _argument_span(content, start, limit):
@@ -288,7 +374,7 @@ def configure_host_access_logs(content, fallback_name, log_root='/var/log/nginx'
                 raise OperationError('Директива access_log не завершена точкой с запятой.')
             arg_start, arg_end, first_arg = _argument_span(text, directive_end, semicolon)
             scope = max((start for start, end in scopes.items() if start < position < end), default=opening)
-            log_directives.append((scope, position, semicolon + 1, arg_start, arg_end, first_arg))
+            log_directives.append((scope, position, semicolon + 1, arg_start, arg_end, first_arg, semicolon))
 
         by_scope = {}
         for directive in log_directives:
@@ -306,6 +392,7 @@ def configure_host_access_logs(content, fallback_name, log_root='/var/log/nginx'
                 else:
                     first_off = disabled[0]
                     replacements.append((first_off[3], first_off[4], target))
+                    replacements.append((first_off[4], first_off[4], ' ' + TRAFFIC_LOG_FORMAT_NAME))
                     replacements.extend((item[1], item[2], '') for item in disabled[1:])
                 host_changed = True
             elif not matching:
@@ -314,10 +401,24 @@ def configure_host_access_logs(content, fallback_name, log_root='/var/log/nginx'
                 closing_indent = re.match(r'[ \t]*', text[line_start:scope_end]).group()
                 directive_indent = closing_indent + '    '
                 if text[line_start:scope_end].strip():
-                    insertions.append((scope_end, f'\n{directive_indent}access_log {target};\n{closing_indent}'))
+                    insertions.append((scope_end, f'\n{directive_indent}access_log {target} {TRAFFIC_LOG_FORMAT_NAME};\n{closing_indent}'))
                 else:
-                    insertions.append((line_start, f'{directive_indent}access_log {target};\n'))
+                    insertions.append((line_start, f'{directive_indent}access_log {target} {TRAFFIC_LOG_FORMAT_NAME};\n'))
                 host_changed = True
+            for matching_log in matching:
+                tail = text[matching_log[4]:matching_log[6]]
+                try:
+                    arguments = shlex.split(tail, comments=False, posix=True)
+                except ValueError as error:
+                    raise OperationError(f'Не удалось разобрать параметры access_log: {error}') from error
+                if not arguments or arguments[0].startswith(('buffer=', 'flush=', 'if=')) or arguments[0] == 'gzip':
+                    replacements.append((matching_log[4], matching_log[4], ' ' + TRAFFIC_LOG_FORMAT_NAME))
+                    host_changed = True
+                elif arguments[0] in {'combined', 'main'}:
+                    format_match = re.match(r'(\s*)[^\s]+', tail)
+                    start = matching_log[4] + len(format_match.group(1))
+                    replacements.append((start, matching_log[4] + format_match.end(), TRAFFIC_LOG_FORMAT_NAME))
+                    host_changed = True
         if host_changed:
             changed_hosts.append(host)
 

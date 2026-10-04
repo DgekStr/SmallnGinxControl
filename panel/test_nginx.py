@@ -224,7 +224,7 @@ class NginxTests(SimpleTestCase):
         for name, byte_counts in entries.items():
             log = logs_root / name / 'access.log'
             log.parent.mkdir()
-            log.write_text(''.join(f'127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 {size} "-" "test"\n' for size in byte_counts))
+            log.write_text(''.join(f'127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 {size} {size + 10} "-" "test"\n' for size in byte_counts))
             config = self.manager.root / 'conf.d' / f'{name}.conf'
             config.write_text(f'server {{ listen 80; server_name {name}; access_log {log}; location / {{ proxy_pass http://127.0.0.1:3000; }} }}')
         disabled = self.manager.root / 'conf.d' / 'disabled.test.conf'
@@ -235,6 +235,7 @@ class NginxTests(SimpleTestCase):
         result = manager.traffic_top()
         self.assertEqual([item['name'] for item in result['items']], ['alpha.test', 'gamma.test', 'beta.test'])
         self.assertEqual([item['bytes'] for item in result['items']], [1400, 700, 200])
+        self.assertEqual(result['hosts']['conf.d/alpha.test.conf'], {'downloaded_bytes': 1400, 'uploaded_bytes': 1420, 'uploaded_complete': True})
 
     def test_enable_host_logging_updates_enabled_and_disabled_configs(self):
         active = self.manager.root / 'conf.d' / 'active.test.conf'
@@ -242,7 +243,7 @@ class NginxTests(SimpleTestCase):
         active.write_text('server { server_name active.test; access_log off; }\n')
         disabled.write_text('server { server_name disabled.test; }\n')
         preview = self.manager.enable_host_logging(dry_run=True)
-        self.assertEqual(preview['files'], 2)
+        self.assertEqual(preview['files'], 3)
         self.assertIn('access_log off', active.read_text())
         self.assertNotIn('active.test-data.log', active.read_text())
         with patch.object(self.manager, 'validate', return_value='ok'), patch.object(self.manager, 'reload'):
@@ -251,3 +252,5 @@ class NginxTests(SimpleTestCase):
         self.assertNotIn('access_log off', active.read_text())
         self.assertIn('active.test-data.log', active.read_text())
         self.assertIn('disabled.test-data.log', disabled.read_text())
+        self.assertIn('smallnginxcontrol_traffic', active.read_text())
+        self.assertIn('log_format smallnginxcontrol_traffic', (self.manager.root / 'nginx.conf').read_text())

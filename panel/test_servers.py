@@ -75,6 +75,18 @@ class ServerTests(TestCase):
             with self.assertRaises(OperationError):
                 worker.dispatch('shell', {'command': 'id'})
 
+    def test_remote_worker_new_host_registers_traffic_log_format(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            (root / 'nginx.conf').write_text('events {}\nhttp {}\n')
+            worker = RemoteWorker(root, root / 'logs', root / 'state')
+            data = {'id': 'conf.d/alpha.example.com.conf', 'content': 'server { listen 80; server_name alpha.example.com; access_log /var/log/nginx/alpha.example.com-data.log smallnginxcontrol_traffic; }\n'}
+            with patch.object(worker, 'lock', return_value=nullcontext()), patch.object(worker, 'validate', return_value='ok'), patch.object(worker, 'reload'):
+                worker.dispatch('create', data)
+            self.assertIn('log_format smallnginxcontrol_traffic', (root / 'nginx.conf').read_text())
+            self.assertIn('smallnginxcontrol_traffic', (root / data['id']).read_text())
+
     def test_ssh_manager_sends_challenge_and_final_tls_configs(self):
         manager = SSHManager.__new__(SSHManager)
         manager.server = Mock(log_root='/var/log/nginx')
@@ -136,7 +148,7 @@ class ServerTests(TestCase):
             for name, sent in [('alpha.test', 900), ('beta.test', 300)]:
                 log = extra_root / name / 'access.log'
                 log.parent.mkdir(parents=True)
-                log.write_text(f'127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 {sent} "-" "test"\n')
+                log.write_text(f'127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 {sent} {sent + 50} "-" "test"\n')
                 path = root / 'conf.d' / f'{name}.conf'
                 content = f'server {{\n    listen 80;\n    server_name {name};\n    access_log {log};\n    location / {{\n        proxy_pass http://127.0.0.1:3000;\n    }}\n}}\n'
                 path.write_text(content)
@@ -146,6 +158,7 @@ class ServerTests(TestCase):
                 result = worker.traffic_top()
             self.assertEqual([item['name'] for item in result['items']], ['alpha.test', 'beta.test'])
             self.assertEqual([item['bytes'] for item in result['items']], [900, 300])
+            self.assertEqual(result['hosts']['conf.d/alpha.test.conf'], {'downloaded_bytes': 900, 'uploaded_bytes': 950, 'uploaded_complete': True})
 
     def test_remote_worker_deletes_only_disabled_hosts(self):
         with tempfile.TemporaryDirectory() as directory:

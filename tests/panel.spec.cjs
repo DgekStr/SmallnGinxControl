@@ -125,6 +125,22 @@ test('hosts and proxies are sorted alphabetically', async ({page}) => {
   }
 });
 
+test('host tables show sampled download and upload traffic', async ({page}) => {
+  await login(page);
+  await page.locator('[data-view="hosts"]').click();
+  const markup = await page.evaluate(() => hostTable([
+    {id: 'conf.d/known.example.com.conf', name: 'known.example.com', domains: ['known.example.com'], kind: 'host', target: '/var/www/known', tls: false, enabled: true, toggleable: true, servers: 1, traffic: {downloaded_bytes: 1024, uploaded_bytes: 512, uploaded_complete: true}},
+    {id: 'conf.d/unknown.example.com.conf', name: 'unknown.example.com', domains: ['unknown.example.com'], kind: 'host', target: '/var/www/unknown', tls: false, enabled: true, toggleable: true, servers: 1, traffic: {downloaded_bytes: 2500, uploaded_bytes: null, uploaded_complete: false}},
+  ]));
+  await page.locator('#hosts-table').evaluate((element, html) => { element.innerHTML = html; }, markup);
+  const known = page.locator('#hosts-table tbody tr[data-id="conf.d/known.example.com.conf"] .host-traffic');
+  const unknown = page.locator('#hosts-table tbody tr[data-id="conf.d/unknown.example.com.conf"] .host-traffic');
+  await expect(known).toContainText('↓ 1 КБ');
+  await expect(known).toContainText('↑ 512 Б');
+  await expect(unknown).toContainText('↓ 2,5 КБ');
+  await expect(unknown).toContainText('↑ —');
+});
+
 test('main config, reload confirmation and audit', async ({page}) => {
   await login(page);
   await page.locator('[data-view="config"]').click();

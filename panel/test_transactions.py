@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from panel.transactions import OperationError, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, issue_webroot_certificate, validate_certificate_request
+from panel.transactions import OperationError, access_log_traffic_totals, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, ensure_traffic_log_format, issue_webroot_certificate, validate_certificate_request
 
 
 class TransactionTests(unittest.TestCase):
@@ -63,12 +63,49 @@ class TransactionTests(unittest.TestCase):
         text = rendered.decode()
         self.assertEqual(changed, ['alpha.test', 'beta.test'])
         self.assertNotIn('access_log off;', text)
-        self.assertIn('access_log /var/log/nginx/alpha.test-data.log;', text)
-        self.assertIn('access_log /var/log/nginx/beta.test-data.log;', text)
+        self.assertIn('access_log /var/log/nginx/alpha.test-data.log smallnginxcontrol_traffic;', text)
+        self.assertIn('access_log /var/log/nginx/beta.test-data.log smallnginxcontrol_traffic;', text)
         self.assertIn('access_log /var/log/nginx/old.log combined;', text)
         rerendered, changed_again = configure_host_access_logs(rendered, 'fallback', '/var/log/nginx')
         self.assertEqual(rerendered, rendered)
         self.assertEqual(changed_again, [])
+
+    def test_traffic_log_format_is_added_to_http_context_once(self):
+        initial = 'events {}\nhttp {\n    include /etc/nginx/conf.d/*.conf;\n}\n'
+        updated, changed = ensure_traffic_log_format(initial)
+        self.assertTrue(changed)
+        self.assertIn('log_format smallnginxcontrol_traffic', updated.decode())
+        self.assertLess(updated.decode().index('log_format smallnginxcontrol_traffic'), updated.decode().index('include /etc/nginx/conf.d'))
+        repeated, changed_again = ensure_traffic_log_format(updated)
+        self.assertFalse(changed_again)
+        self.assertEqual(repeated, updated)
+
+    def test_access_log_traffic_reports_download_and_upload_when_format_has_request_length(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'access.log'
+            log.write_text('127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 345 712 "-" "test"\n')
+            totals = access_log_traffic_totals([str(log)], [root])
+            self.assertEqual(totals, {'downloaded_bytes': 345, 'uploaded_bytes': 712, 'uploaded_complete': True})
+
+    def test_access_log_traffic_marks_upload_unknown_for_combined_format(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'access.log'
+            log.write_text('127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 345 "-" "test"\n')
+            totals = access_log_traffic_totals([str(log)], [root])
+            self.assertEqual(totals, {'downloaded_bytes': 345, 'uploaded_bytes': None, 'uploaded_complete': False})
+
+    def test_access_log_traffic_marks_mixed_request_sizes_as_partial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'access.log'
+            log.write_text(
+                '127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET /old HTTP/1.1" 200 345 "-" "test"\n'
+                '127.0.0.1 - - [04/Oct/2026:12:00:01 +0000] "POST /new HTTP/1.1" 200 200 712 "-" "test"\n'
+            )
+            totals = access_log_traffic_totals([str(log)], [root])
+            self.assertEqual(totals, {'downloaded_bytes': 545, 'uploaded_bytes': 712, 'uploaded_complete': False})
 
     def test_per_host_log_name_is_bounded_for_long_server_name(self):
         host = 'a' * 220 + '.example.test'
@@ -77,6 +114,18 @@ class TransactionTests(unittest.TestCase):
         log_path = next(token for token in rendered.decode().split() if token.startswith('/var/log/nginx/'))
         self.assertLess(len(Path(log_path).name), 255)
         self.assertEqual(len(changed), 1)
+
+    def test_existing_per_host_combined_log_is_upgraded_to_traffic_format(self):
+        content = 'server { server_name alpha.test; access_log /var/log/nginx/alpha.test-data.log combined; }\n'
+        updated, changed = configure_host_access_logs(content, 'fallback', '/var/log/nginx')
+        self.assertEqual(changed, ['alpha.test'])
+        self.assertIn('access_log /var/log/nginx/alpha.test-data.log smallnginxcontrol_traffic;', updated.decode())
+
+    def test_existing_per_host_default_log_format_is_upgraded(self):
+        content = 'server { server_name alpha.test; access_log /var/log/nginx/alpha.test-data.log; }\n'
+        updated, changed = configure_host_access_logs(content, 'fallback', '/var/log/nginx')
+        self.assertEqual(changed, ['alpha.test'])
+        self.assertIn('access_log /var/log/nginx/alpha.test-data.log smallnginxcontrol_traffic;', updated.decode())
 
     def test_certificate_days_remaining_returns_earliest_expiry(self):
         with tempfile.TemporaryDirectory() as directory:

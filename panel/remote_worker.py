@@ -11,9 +11,9 @@ from pathlib import Path
 
 if __package__:
     from .transactions import (
-        OperationError, access_log_traffic_bytes, apply_transaction, atomic_write,
+        OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
         certificate_days_remaining, issue_webroot_certificate, validate_certificate_request,
-        delete_config_transaction, has_proxy_server, is_allowed_log_path,
+        delete_config_transaction, ensure_traffic_log_format, has_proxy_server, is_allowed_log_path,
         is_maintenance_config, maintenance_backup_path, render_maintenance_config,
     )
 
@@ -138,7 +138,23 @@ class RemoteWorker:
                 https_content = data.get('https_content', '').encode('utf-8')
                 if not https_content or len(https_content) > 256 * 1024 or b'listen 443 ssl;' not in https_content:
                     raise OperationError('Final HTTPS configuration is missing or too large')
-            result = apply_transaction(lambda: atomic_write(path, content), lambda: path.unlink(missing_ok=True), self.validate, self.reload)
+            main_path = self.path('nginx.conf') if (self.root / 'nginx.conf').is_file() else None
+            main_original = main_path.read_bytes() if main_path is not None else None
+            main_updated, format_changed = ensure_traffic_log_format(main_original) if main_original is not None else (None, False)
+            if format_changed:
+                self.backup('nginx.conf', main_original)
+
+            def create_host():
+                if format_changed:
+                    atomic_write(main_path, main_updated)
+                atomic_write(path, content)
+
+            def remove_host():
+                path.unlink(missing_ok=True)
+                if format_changed:
+                    atomic_write(main_path, main_original)
+
+            result = apply_transaction(create_host, remove_host, self.validate, self.reload)
             if not issue_ssl:
                 return result
             try:
@@ -258,14 +274,17 @@ class RemoteWorker:
 
     def traffic_top(self, limit=5):
         totals = []
+        hosts = {}
         for config in self.inventory()['configs']:
-            if not config['enabled'] or config.get('maintenance'):
-                continue
             content = re.sub(r'(?m)^\s*#.*$', '', config['content'])
             raw_paths = re.findall(r'(?m)^\s*access_log\s+(?:"([^"]+)"|\'([^\']+)\'|([^;\s]+))', content)
             paths = list(dict.fromkeys(next(value for value in match if value) for match in raw_paths))
             paths = [path for path in paths if path.lower() != 'off']
-            total = sum(access_log_traffic_bytes(path, self.allowed_log_roots) for path in paths)
+            traffic = access_log_traffic_totals(paths, self.allowed_log_roots)
+            hosts[config['id']] = traffic
+            total = traffic['downloaded_bytes']
+            if not config['enabled'] or config.get('maintenance'):
+                continue
             if not total:
                 continue
             names = re.findall(r'(?m)^\s*server_name\s+([^;]+);', content)
@@ -273,7 +292,7 @@ class RemoteWorker:
             kind = 'proxy' if re.search(r'\bproxy_pass\b', content) else 'host'
             totals.append({'name': name, 'kind': kind, 'bytes': total})
         totals.sort(key=lambda entry: (-entry['bytes'], entry['name'].casefold()))
-        return {'items': totals[:max(1, min(5, limit))], 'sample_bytes_per_log': 128 * 1024}
+        return {'items': totals[:max(1, min(5, limit))], 'hosts': hosts, 'sample_bytes_per_log': 128 * 1024}
 
     def logs(self, candidates, lines):
         output, sources = [], []

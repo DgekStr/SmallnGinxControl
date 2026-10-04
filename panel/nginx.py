@@ -12,9 +12,9 @@ import portalocker
 from django.conf import settings
 
 from .transactions import (
-    OperationError, access_log_traffic_bytes, apply_transaction, atomic_write,
+    OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
     certificate_days_remaining, configure_host_access_logs, delete_config_transaction,
-    issue_webroot_certificate, validate_certificate_request,
+    ensure_traffic_log_format, issue_webroot_certificate, validate_certificate_request,
     has_proxy_server, is_allowed_log_path,
     is_maintenance_config, maintenance_backup_path, render_maintenance_config,
 )
@@ -332,6 +332,13 @@ class NginxManager:
     def enable_host_logging(self, *, dry_run=True):
         with self.lock():
             plans, hosts = {}, set()
+            main_config = self.root / 'nginx.conf'
+            if main_config.is_file():
+                original = main_config.read_bytes()
+                updated, changed_format = ensure_traffic_log_format(original)
+                if changed_format:
+                    self.syntax(updated.decode('utf-8'))
+                    plans[main_config] = ('nginx.conf', original, updated)
             for item in self.inventory()['items']:
                 if not item['toggleable']:
                     continue
@@ -403,7 +410,7 @@ class NginxManager:
         filename = name.replace('*', 'wildcard') + '.conf'
         log_root = self.logs_root.as_posix() if log_root is None else log_root.rstrip('/')
         log_name = name.replace('*', 'wildcard')
-        access_log = f'{log_root}/{log_name}-data.log'
+        access_log = f'{log_root}/{log_name}-data.log smallnginxcontrol_traffic'
         error_log = f'{log_root}/{filename}.error.log'
         acme_root = PurePosixPath(str(settings.SNC_ACME_WEBROOT).replace('\\', '/'))
         if not acme_root.is_absolute() or '..' in acme_root.parts or not re.fullmatch(r'/[a-zA-Z0-9_./-]+', acme_root.as_posix()):
@@ -453,7 +460,24 @@ class NginxManager:
             for item in self.inventory()['items']:
                 if name in item['domains']:
                     raise OperationError('Такой домен уже есть в конфигурации.')
-            result = apply_transaction(lambda: atomic_write(path, content.encode()), lambda: path.unlink(missing_ok=True), self.validate, self.reload)
+            content_bytes = content.encode()
+            main_path = self.path('nginx.conf') if not self.demo else None
+            main_original = main_path.read_bytes() if main_path is not None else None
+            main_updated, format_changed = ensure_traffic_log_format(main_original) if main_original is not None else (None, False)
+            if format_changed:
+                self.backup('nginx.conf', main_original)
+
+            def create_host():
+                if format_changed:
+                    atomic_write(main_path, main_updated)
+                atomic_write(path, content_bytes)
+
+            def remove_host():
+                path.unlink(missing_ok=True)
+                if format_changed:
+                    atomic_write(main_path, main_original)
+
+            result = apply_transaction(create_host, remove_host, self.validate, self.reload)
             if not issue_ssl:
                 return result
             try:
@@ -474,19 +498,22 @@ class NginxManager:
 
     def traffic_top(self, limit=5):
         totals = []
+        hosts = {}
         for item in self.inventory()['items']:
-            if not item['enabled'] or item['maintenance']:
-                continue
             try:
                 nodes = self.parse(self.path(item['id']))
             except (OperationError, OSError, UnicodeError):
                 continue
             paths, _ = configured_log_paths(nodes, 'access')
-            total = sum(access_log_traffic_bytes(path, self.allowed_log_roots) for path in paths)
+            traffic = access_log_traffic_totals(paths, self.allowed_log_roots)
+            hosts[item['id']] = traffic
+            total = traffic['downloaded_bytes']
+            if not item['enabled'] or item['maintenance']:
+                continue
             if total:
                 totals.append({'name': item['name'], 'kind': item['kind'], 'bytes': total})
         totals.sort(key=lambda entry: (-entry['bytes'], entry['name'].casefold()))
-        return {'items': totals[:max(1, min(5, limit))], 'sample_bytes_per_log': 128 * 1024}
+        return {'items': totals[:max(1, min(5, limit))], 'hosts': hosts, 'sample_bytes_per_log': 128 * 1024}
 
     def logs(self, identifier='', kind='access', lines=150):
         if kind not in {'access', 'error'}:

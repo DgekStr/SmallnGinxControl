@@ -58,6 +58,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 - Хосты и reverse proxy, поиск домена/пути/upstream, фильтры состояния.
 - Добавление HTTP-сайта или HTTP(S)-upstream, отдельные журналы.
 - При создании host или reverse proxy можно явно запросить выпуск Let's Encrypt сертификата через Certbot; таблица HTTPS-хостов показывает целое число дней до окончания сертификата.
+- Таблицы host/reverse proxy показывают sampled traffic по последним 128 КиБ каждого access log: скачано (`$bytes_sent`) и отправлено (`$request_length`).
 - Включение/отключение стандартных sites-available/sites-enabled и conf.d/*.conf; reverse proxy при отключении переходит в режим обслуживания с `maitenance.html`.
 - Редактор исходных конфигураций, сложных location/upstream/TLS и nginx.conf без перегенерации существующих файлов.
 - Crossplane, настоящий `nginx -t` в рабочем режиме, reload и отдельный подтверждаемый restart.
@@ -94,7 +95,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 
 Журналы читаются из `SNC_LOG_ROOT` и перечисленных в `SNC_LOG_EXTRA_ROOTS` дополнительных корней; по умолчанию добавлен `/var/http`. Каждая директива access_log/error_log проверяется по real path, максимум 128 КБ на файл за запрос. Syslog, динамические имена и пути вне разрешённых roots не читаются. При наследуемом журнале нужно выбрать общий журнал.
 
-TOP-5 traffic строится по стандартному access-log полю bytes-sent: учитываются последние 128 KiB каждого настроенного журнала активного vhost. `access_log off`, нестандартный log format без status/bytes и конфигурации без отдельного access log не дают per-host значения и не включаются в рейтинг. Это рейтинг sampled log traffic, а не гарантированный сетевой счётчик за точный временной интервал.
+Per-host traffic и TOP-5 суммируют распознаваемые поля access log по последним 128 КиБ каждого журнала. Формат `smallnginxcontrol_traffic` включает `$bytes_sent` (скачано) и `$request_length` (отправлено, включая request line и headers). Upload отображается как `—`, если custom log format не содержит request length; `~` помечает частичный sample со смесью старых и новых строк. Это sampled log traffic, а не точный интерфейсный RX/TX или lifetime-счётчик. TOP-5 ранжирует активные хосты по скачанным bytes; `access_log off`, отсутствующие журналы и несовместимые форматы не дают per-host значения.
 
 Удаление доступно только для стандартной отключённой конфигурации. Для активного сайта сначала примените toggle (reverse proxy перейдёт в обслуживание), затем подтвердите удаление; приложение удалит конфиг из nginx include tree и скроет его из панели, выполнив `nginx -t` и reload транзакционно. Предыдущие файлы сохраняются в резервных копиях state-каталога. Редактирование и удаление выполняйте без параллельных изменений через shell/Certbot.
 
@@ -115,7 +116,7 @@ npm run test:e2e
 
 В Windows тесты используют установленный Google Chrome; браузер можно выбрать через SNC_TEST_BROWSER. В Linux предварительно выполнить `npx playwright install chromium`. Тесты запускаются в отдельной локальной демосреде; рабочее демо не меняют. Готовые ресурсы находятся в static/vendor, Node.js нужен только для их обновления и тестов. Изображение static/brand.png взято из предоставленного проекта CRM/focuslens-site/assets/logo_dark_tile.png. Лицензии библиотек сохранены рядом с ресурсами.
 
-Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая `main`: **65 backend-тестов и 8 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention и TOP-5 sampled traffic. Подробности и ограничения: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
+Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая `main`: **72 backend-теста и 10 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention, TOP-5 sampled traffic и per-host download/upload counters. Подробности и ограничения: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
 
 
 ## Документы
