@@ -1,8 +1,8 @@
-# SmallnGinxControl v1.0.1
+# SmallnGinxControl v1.0.2
 
 Русскоязычная self-hosted панель для управления одним или несколькими nginx-серверами. Django/Waitress обслуживают интерфейс и API; локальные и удалённые серверы управляются через nginx CLI или проверенный SSH. Статика, шрифты и графики поставляются локально, Docker и Node.js на production-сервере не нужны.
 
-**Последний versioned-релиз: v1.0.1.** Ветка `main` содержит последующие изменения без перемещения тега и смены версии. Русский интерфейс, светлая и тёмная темы, адаптивная навигация, управление vhost/reverse proxy, per-host logging и retention, TOP-5 трафика, конфигурациями, журналами и профилями SSH.
+**Текущая версия: v1.0.2.** Русский интерфейс, светлая и тёмная темы, адаптивная навигация, управление vhost/reverse proxy, per-host logging и retention, TOP-5 трафика, конфигурациями, журналами и профилями SSH.
 
 ![Обзор сервера](doc/images/overview.png)
 
@@ -40,9 +40,9 @@ python serve.py
 ssh -N -L 7444:127.0.0.1:7444 USER@SERVER_IP
 ```
 
-Оставьте SSH-сеанс открытым и на клиенте перейдите на http://127.0.0.1:7444. Для постоянного доступа по сети установите production-сервис из `v1.0.1`; оставьте приложение на loopback, поставьте перед ним HTTPS reverse-proxy и ограничьте доступ firewall. Подробности: [HTTPS и deployment](doc/deployment.md#https-доступ).
+Оставьте SSH-сеанс открытым и на клиенте перейдите на http://127.0.0.1:7444. Для постоянного доступа по сети установите production-сервис версии `v1.0.2`; оставьте приложение на loopback, поставьте перед ним HTTPS reverse-proxy и ограничьте доступ firewall. Подробности: [HTTPS и deployment](doc/deployment.md#https-доступ).
 
-Для установки Linux-сервиса из опубликованного git-тега используйте [deploy/install.sh](deploy/install.sh) или пошаговую [инструкцию](doc/deployment.md). Установщик запускается от root, клонирует тег v1.0.1, создаёт production state вне репозитория и запрашивает пароль администратора только в терминале. По умолчанию приложение доступно через SSH-туннель, без открытого HTTP-порта.
+Для установки Linux-сервиса из git-тега версии `v1.0.2` используйте [deploy/install.sh](deploy/install.sh) или пошаговую [инструкцию](doc/deployment.md). Установщик запускается от root, клонирует выбранный тег, создаёт production state вне репозитория и запрашивает пароль администратора только в терминале. По умолчанию приложение доступно через SSH-туннель, без открытого HTTP-порта.
 
 Production требует Python 3.12+, systemd и nginx. Допускается отдельный TLS reverse-proxy перед loopback upstream. Для частного IP self-signed сертификат не будет автоматически доверенным браузером; для публично доверенного TLS используйте DNS-имя и сертификат от доверенного CA.
 
@@ -116,7 +116,7 @@ npm run test:e2e
 
 В Windows тесты используют установленный Google Chrome; браузер можно выбрать через SNC_TEST_BROWSER. В Linux предварительно выполнить `npx playwright install chromium`. Тесты запускаются в отдельной локальной демосреде; рабочее демо не меняют. Готовые ресурсы находятся в static/vendor, Node.js нужен только для их обновления и тестов. Изображение static/brand.png взято из предоставленного проекта CRM/focuslens-site/assets/logo_dark_tile.png. Лицензии библиотек сохранены рядом с ресурсами.
 
-Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая `main`: **72 backend-теста и 10 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention, TOP-5 sampled traffic и per-host download/upload counters. Подробности и ограничения: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
+Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая версия `v1.0.2`: **72 backend-теста и 10 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention, TOP-5 sampled traffic и per-host download/upload counters. Подробности и ограничения предыдущего релиза: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
 
 
 ## Документы

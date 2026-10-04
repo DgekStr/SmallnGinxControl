@@ -17,7 +17,7 @@ Production-установка клонирует версионированны�
 Сначала убедитесь, что `/opt/smallnginxcontrol`, `/etc/smallnginxcontrol.env` и systemd unit ещё не существуют. Установщик отказывается перезаписывать найденную установку.
 
 ```sh
-git clone --depth 1 --branch v1.0.1 https://github.com/DgekStr/SmallnGinxControl.git /opt/smallnginxcontrol
+git clone --depth 1 --branch v1.0.2 https://github.com/DgekStr/SmallnGinxControl.git /opt/smallnginxcontrol
 cd /opt/smallnginxcontrol
 sudo ./deploy/install.sh
 ```
@@ -75,7 +75,7 @@ systemctl is-active smallnginxcontrol
 systemctl enable --now smallnginxcontrol-log-cleanup.timer
 ```
 
-Тег `v1.0.1` остаётся закреплённым за предыдущим versioned release. Для установки именно этого состояния вместо текущей ветки используйте `git checkout v1.0.1`; новые SSL-функции находятся в `main` и не меняют номер версии.
+Тег `v1.0.1` сохраняет предыдущий versioned release; текущая версия приложения — `v1.0.2`. Для установки предыдущего состояния используйте `git checkout v1.0.1`.
 
 Если в каталоге есть локальные изменения, сначала сохраните их отдельно и не выполняйте `git reset --hard`.
 

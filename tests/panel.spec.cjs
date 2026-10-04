@@ -141,6 +141,23 @@ test('host tables show sampled download and upload traffic', async ({page}) => {
   await expect(unknown).toContainText('↑ —');
 });
 
+test('host link emoji uses TLS and listener port', async ({page}) => {
+  await login(page);
+  const markup = await page.evaluate(() => hostTable([
+    {id: 'conf.d/secure.example.com.conf', name: 'secure.example.com', domains: ['secure.example.com'], kind: 'host', target: '/var/www/secure', listen: '80, 443 ssl', tls: true, enabled: true, toggleable: true, servers: 1},
+    {id: 'conf.d/dev.example.com.conf', name: 'dev.example.com', domains: ['dev.example.com'], kind: 'proxy', target: 'http://127.0.0.1:3000', listen: '127.0.0.1:8088', tls: false, enabled: true, toggleable: true, servers: 1},
+    {id: 'conf.d/wildcard.example.com.conf', name: '*.example.com', domains: ['*.example.com'], kind: 'host', target: '/var/www/wildcard', listen: '80', tls: false, enabled: true, toggleable: true, servers: 1},
+  ]));
+  await page.locator('#hosts-table').evaluate((element, html) => { element.innerHTML = html; }, markup);
+  await expect(page.locator('#hosts-table tr[data-id="conf.d/secure.example.com.conf"] .host-open-link')).toHaveAttribute('href', 'https://secure.example.com/');
+  await expect(page.locator('#hosts-table tr[data-id="conf.d/dev.example.com.conf"] .host-open-link')).toHaveAttribute('href', 'http://dev.example.com:8088/');
+  await expect(page.locator('#hosts-table tr[data-id="conf.d/wildcard.example.com.conf"] .host-open-link')).toHaveCount(0);
+  const hostLink = page.locator('#hosts-table tr[data-id="conf.d/secure.example.com.conf"] .host-open-link');
+  await expect(hostLink).toHaveText('🔗');
+  const lineOffset = await page.locator('#hosts-table tr[data-id="conf.d/secure.example.com.conf"] .domain-name').evaluate((name) => Math.abs(name.getBoundingClientRect().top - name.nextElementSibling.getBoundingClientRect().top));
+  expect(lineOffset).toBeLessThan(2);
+});
+
 test('main config, reload confirmation and audit', async ({page}) => {
   await login(page);
   await page.locator('[data-view="config"]').click();

@@ -106,6 +106,21 @@ async function runAction(button, operation, errorSelector) {
   }
 }
 
+function hostHref(item) {
+  const hostname = String(item.name || '').trim().toLowerCase();
+  const labels = hostname.split('.');
+  if (!hostname || hostname.startsWith('*.') || labels.some((label) => !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return '';
+  const protocol = item.tls ? 'https' : 'http';
+  const defaultPort = item.tls ? 443 : 80;
+  const ports = String(item.listen || '').split(',').map((entry) => {
+    const address = entry.trim().split(/\s+/)[0];
+    const match = address.match(/(?:^|:)(\d+)$/);
+    return match ? Number(match[1]) : null;
+  }).filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
+  const port = ports.find((value) => value === defaultPort) || ports[0] || defaultPort;
+  return `${protocol}://${hostname}${port === defaultPort ? '' : `:${port}`}/`;
+}
+
 function hostTable(items) {
   if (!items.length) return `<div class="empty-state">${icon('folder-search')}<strong>Конфигурации не найдены</strong><span>Нет хостов, соответствующих выбранному фильтру.</span></div>`;
   const rows = items.map((item) => {
@@ -119,7 +134,9 @@ function hostTable(items) {
     const uploaded = Number.isInteger(traffic?.uploaded_bytes) ? `${traffic.uploaded_complete ? '' : '~'}${trafficSize(traffic.uploaded_bytes)}` : '—';
     const trafficTitle = 'Скачано / отправлено по последним 128 КиБ access log; ~ означает частичные данные';
     const trafficCell = `<div class="host-traffic" title="${trafficTitle}"><span aria-label="Скачано">↓ ${traffic ? trafficSize(traffic.downloaded_bytes) : '—'}</span><span aria-label="Отправлено">↑ ${traffic ? uploaded : '—'}</span></div>`;
-    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span><span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td>${trafficCell}</td><td><div class="protocol-cell"><span class="protocol ${item.tls ? 'secure' : ''}">${icon(item.tls ? 'lock-keyhole' : 'globe')}${item.tls ? 'HTTPS' : 'HTTP'}</span>${expiry}</div></td><td><span class="badge ${item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${toggleTitle}" ${item.toggleable ? '' : 'disabled'}></button><button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
+    const href = hostHref(item);
+    const openLink = href ? `<a class="host-open-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="Открыть хост" aria-label="Открыть ${escapeHtml(item.name)}">🔗</a>` : '';
+    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span>${openLink}<span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td>${trafficCell}</td><td><div class="protocol-cell"><span class="protocol ${item.tls ? 'secure' : ''}">${icon(item.tls ? 'lock-keyhole' : 'globe')}${item.tls ? 'HTTPS' : 'HTTP'}</span>${expiry}</div></td><td><span class="badge ${item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${toggleTitle}" ${item.toggleable ? '' : 'disabled'}></button><button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
   }).join('');
   return `<div class="table-scroll"><table class="data-table"><thead><tr><th>ДОМЕН / КОНФИГУРАЦИЯ</th><th>НАЗНАЧЕНИЕ</th><th>ТРАФИК</th><th>ПРОТОКОЛ</th><th>СТАТУС</th><th>ДЕЙСТВИЯ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
