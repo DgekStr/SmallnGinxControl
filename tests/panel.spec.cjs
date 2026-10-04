@@ -324,6 +324,21 @@ test('nginx log XML export preserves sources and escapes log text', async ({page
   expect(result).toEqual({hasParserError: false, kind: 'error', path: '/var/log/nginx/error.log', entry: 'upstream sent <bad> & "quoted" data'});
 });
 
+test('administrator can start TOTP enrollment from settings modal', async ({page}) => {
+  await login(page);
+  await page.locator('[data-view="settings"]').click();
+  await expect(page.locator('#two-factor-status')).toHaveText('Не подключена');
+  await page.locator('#two-factor-toggle').click();
+  const dialog = page.locator('#two-factor-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('#two-factor-instructions')).toContainText('Google Authenticator');
+  await expect(dialog.locator('#two-factor-qr')).toHaveAttribute('src', /^data:image\/svg\+xml;base64,/);
+  await expect(dialog.locator('#two-factor-secret')).toHaveValue(/^[A-Z2-7]{32}$/);
+  await dialog.locator('#two-factor-cancel').click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator('#two-factor-status')).toHaveText('Не подключена');
+});
+
 test('switching server clears previous SSD usage while new metrics load', async ({page}) => {
   await login(page);
   await expect(page.locator('#current-disk')).toBeAttached();

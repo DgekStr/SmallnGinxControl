@@ -1,5 +1,6 @@
 lucide.createIcons();
-document.querySelector('#reveal-password').addEventListener('click', (event) => {
+const revealPassword = document.querySelector('#reveal-password');
+if (revealPassword) revealPassword.addEventListener('click', (event) => {
   const input = document.querySelector('[name="password"]');
   const hidden = input.type === 'password';
   input.type = hidden ? 'text' : 'password';

@@ -5,4 +5,9 @@
 .host-traffic{display:flex;gap:10px;white-space:nowrap;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}
 .host-open-link{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-left:5px;border-radius:4px;text-decoration:none;vertical-align:middle}.host-open-link:hover{background:var(--surface-hover);color:var(--cyan)}
 .green-bar{background:var(--green)}
+.two-factor-modal .two-factor-qr-wrap{display:grid;place-items:center;width:224px;height:224px;margin:14px auto;background:#fff;border-radius:6px}
+.two-factor-modal #two-factor-qr{display:block;width:200px;height:200px}
+.two-factor-secret{display:block;margin-top:6px;padding:9px;border:1px solid var(--border);border-radius:4px;background:var(--input);font:11px/1.5 Consolas,monospace;overflow-wrap:anywhere}
+.two-factor-modal form{margin-top:16px}
+.two-factor-modal .two-factor-qr-wrap{display:grid;place-items:center;width:224px;height:224px;margin:14px auto;background:#fff;border-radius:6px}.two-factor-modal #two-factor-qr{display:block;width:200px;height:200px}.two-factor-secret{display:block;margin-top:6px;padding:9px;border:1px solid var(--border);border-radius:4px;background:var(--input);font:11px/1.5 Consolas,monospace;overflow-wrap:anywhere}.two-factor-modal form{margin-top:16px}
 .domain-name{display:inline}

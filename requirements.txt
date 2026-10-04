@@ -6,3 +6,5 @@ waitress>=3.0.2,<4
 whitenoise>=6.9,<7
 paramiko>=4.0,<5
 cryptography>=46,<49
+pyotp>=2.9,<3
+qrcode>=8.2,<9

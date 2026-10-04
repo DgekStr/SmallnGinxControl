@@ -3,7 +3,10 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 
-from .models import AuditEvent
+import pyotp
+
+from .models import AuditEvent, TwoFactorCredential
+from .two_factor import generate_totp_secret, provisioning_uri
 
 
 class AuthenticationTests(TestCase):
@@ -23,6 +26,63 @@ class AuthenticationTests(TestCase):
         self.assertEqual(self.client.post('/logout/').status_code, 302)
         self.assertFalse(self.client.login(username='admin', password='12345'))
         self.assertTrue(self.client.login(username='admin', password='Different-secure-pass!42'))
+
+    def test_totp_challenge_blocks_login_until_valid_code(self):
+        secret = generate_totp_secret()
+        credential = TwoFactorCredential.objects.create(user=self.user)
+        credential.set_secret(secret)
+        credential.enabled = True
+        credential.save()
+
+        response = self.client.post('/login/', {'username': 'admin', 'password': '12345'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['two_factor_pending'])
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+        valid_code = pyotp.TOTP(secret).now()
+        invalid_code = '000000' if valid_code != '000000' else '000001'
+        response = self.client.post('/login/', {'code': invalid_code})
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+        response = self.client.post('/login/', {'code': pyotp.TOTP(secret).now()})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(int(self.client.session['_auth_user_id']), self.user.pk)
+
+    def test_two_factor_enrollment_encrypts_secret_and_requires_code(self):
+        self.client.force_login(self.user)
+        response = self.client.get('/api/two-factor/')
+        self.assertEqual(response.json(), {'enabled': False})
+
+        response = self.client.post('/api/two-factor/', {'action': 'begin'}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        secret = response.json()['secret']
+        self.assertTrue(response.json()['qr_data_uri'].startswith('data:image/svg+xml;base64,'))
+        self.assertTrue(provisioning_uri(secret, self.user.get_username()).startswith('otpauth://totp/'))
+        credential = TwoFactorCredential.objects.get(user=self.user)
+        self.assertNotIn(secret, credential.encrypted_pending_secret)
+        self.assertEqual(credential.get_secret(pending=True), secret)
+
+        valid_code = pyotp.TOTP(secret).now()
+        invalid_code = '000000' if valid_code != '000000' else '000001'
+        response = self.client.post('/api/two-factor/', {'action': 'enable', 'code': invalid_code}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        credential.refresh_from_db()
+        self.assertFalse(credential.enabled)
+
+        response = self.client.post('/api/two-factor/', {'action': 'enable', 'code': pyotp.TOTP(secret).now()}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        credential.refresh_from_db()
+        self.assertTrue(credential.enabled)
+        self.assertNotIn(secret, credential.encrypted_secret)
+
+        response = self.client.get('/api/two-factor/')
+        self.assertEqual(response.json(), {'enabled': True})
+        response = self.client.post('/api/two-factor/', {'action': 'disable', 'code': pyotp.TOTP(secret).now()}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        credential.refresh_from_db()
+        self.assertFalse(credential.enabled)
+        self.assertEqual(credential.encrypted_secret, '')
 
     def test_weak_password_rejected(self):
         self.client.force_login(self.user)

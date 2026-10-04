@@ -81,6 +81,31 @@ class MetricSample(models.Model):
         ordering = ['-id']
 
 
+class TwoFactorCredential(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='two_factor_credential')
+    encrypted_secret = models.TextField(blank=True, default='')
+    encrypted_pending_secret = models.TextField(blank=True, default='')
+    enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @staticmethod
+    def cipher():
+        from cryptography.fernet import Fernet
+        key = hashlib.sha256(('snc-2fa:' + settings.SECRET_KEY).encode()).digest()
+        return Fernet(base64.urlsafe_b64encode(key))
+
+    def get_secret(self, *, pending=False):
+        encrypted = self.encrypted_pending_secret if pending else self.encrypted_secret
+        return self.cipher().decrypt(encrypted.encode()).decode() if encrypted else ''
+
+    def set_secret(self, value, *, pending=False):
+        encrypted = self.cipher().encrypt(value.encode()).decode() if value else ''
+        if pending:
+            self.encrypted_pending_secret = encrypted
+        else:
+            self.encrypted_secret = encrypted
+
+
 class ServiceSetting(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     log_retention_days = models.PositiveSmallIntegerField(default=30, validators=[MinValueValidator(1), MaxValueValidator(3650)])

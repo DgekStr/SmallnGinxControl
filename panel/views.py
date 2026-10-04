@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import portalocker
 from django.conf import settings
-from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
+from django.contrib.auth import authenticate, get_user_model, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.db import transaction
@@ -18,9 +18,10 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .metrics import snapshot
-from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting
+from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting, TwoFactorCredential
 from .servers import AddressForm, ServerForm, initialize_demo, manager_for, public_server, selected_server
 from .transactions import OperationError
+from .two_factor import generate_totp_secret, provisioning_uri, qr_data_uri, verify_totp
 
 
 def record(request, action, target='', success=True, detail='', server=None):
@@ -82,10 +83,15 @@ def manage_servers(request, data):
 def sign_in(request):
     if request.user.is_authenticated:
         return redirect('/')
+    if request.method == 'GET' and request.GET.get('cancel-2fa') == '1':
+        request.session.pop('two_factor_pending_user_id', None)
+        request.session.pop('two_factor_pending_username', None)
+        return redirect('/login/')
     error = ''
     status = 200
+    pending_user_id = request.session.get('two_factor_pending_user_id')
     if request.method == 'POST':
-        username = request.POST.get('username', '')[:150]
+        username = str(request.session.get('two_factor_pending_username', '') if pending_user_id else request.POST.get('username', ''))[:150]
         address = request.META.get('REMOTE_ADDR', '')
         keys = [hashlib.sha256(value.encode()).hexdigest() for value in ['ip:' + address, 'user:' + username.lower()]]
         now = timezone.now()
@@ -101,16 +107,45 @@ def sign_in(request):
                     attempt.save()
         if blocked:
             error, status = 'Слишком много попыток. Повторите через 15 минут.', 429
+        elif pending_user_id:
+            user = get_user_model().objects.filter(pk=pending_user_id, is_staff=True).first()
+            credential = TwoFactorCredential.objects.filter(user=user, enabled=True).first() if user else None
+            secret = credential.get_secret() if credential else ''
+            if user and secret and verify_totp(secret, request.POST.get('code', '')):
+                request.session.pop('two_factor_pending_user_id', None)
+                request.session.pop('two_factor_pending_username', None)
+                LoginAttempt.objects.filter(key__in=keys).delete()
+                login(request, user)
+                record(request, 'login')
+                return redirect('/')
+            error, status = 'Неверный одноразовый код.', 401
         else:
             user = authenticate(request, username=username, password=request.POST.get('password', ''))
             if user is not None and user.is_staff:
+                credential = TwoFactorCredential.objects.filter(user=user, enabled=True).first()
+                if credential:
+                    request.session['two_factor_pending_user_id'] = user.pk
+                    request.session['two_factor_pending_username'] = user.get_username()
+                    request.session.set_expiry(300)
+                    return render(request, 'login.html', {
+                        'two_factor_pending': True,
+                        'two_factor_username': user.get_username(),
+                        'demo': settings.SNC_MODE == 'demo',
+                        'server': settings.SNC_SERVER,
+                    })
                 LoginAttempt.objects.filter(key__in=keys).delete()
                 login(request, user)
                 record(request, 'login')
                 return redirect('/')
             error, status = 'Неверный логин или пароль.', 401
         LoginAttempt.objects.filter(window__lt=now - timedelta(days=1)).delete()
-    return render(request, 'login.html', {'error': error, 'demo': settings.SNC_MODE == 'demo', 'server': settings.SNC_SERVER}, status=status)
+    return render(request, 'login.html', {
+        'error': error,
+        'two_factor_pending': bool(request.session.get('two_factor_pending_user_id')),
+        'two_factor_username': request.session.get('two_factor_pending_username', ''),
+        'demo': settings.SNC_MODE == 'demo',
+        'server': settings.SNC_SERVER,
+    }, status=status)
 
 
 @require_POST
@@ -141,13 +176,16 @@ def api(request, resource):
     try:
         if resource == 'servers' and request.method == 'GET':
             return JsonResponse({'servers': [public_server(item) for item in Server.objects.all()]})
-        if resource not in {'servers', 'password', 'settings'}:
+        if resource not in {'servers', 'password', 'settings', 'two-factor'}:
             server = selected_server(request.GET.get('server'))
             expected_profile = request.GET.get('server_revision')
             if (expected_profile is not None or request.method == 'POST') and expected_profile != server.updated_at.isoformat():
                 raise OperationError('Профиль сервера изменён или не подтверждён. Обновите страницу перед операцией.')
             manager = manager_for(server)
         if request.method == 'GET':
+            if resource == 'two-factor':
+                credential = TwoFactorCredential.objects.filter(user=request.user).first()
+                return JsonResponse({'enabled': bool(credential and credential.enabled)})
             if resource == 'settings':
                 service_settings = ServiceSetting.get_solo()
                 return JsonResponse({'log_retention_days': service_settings.log_retention_days})
@@ -172,7 +210,45 @@ def api(request, resource):
         if resource == 'servers':
             return JsonResponse(manage_servers(request, data))
         target = data.get('id', '')
-        if resource == 'hosts':
+        if resource == 'two-factor':
+            action = data.get('action', '')
+            target = request.user.get_username()
+            credential, _ = TwoFactorCredential.objects.get_or_create(user=request.user)
+            if action == 'begin':
+                if credential.enabled:
+                    raise OperationError('Сначала отключите существующую двухфакторную защиту.')
+                secret = generate_totp_secret()
+                credential.set_secret(secret, pending=True)
+                credential.save(update_fields=['encrypted_pending_secret', 'updated_at'])
+                uri = provisioning_uri(secret, request.user.get_username())
+                result = {'ok': True, 'secret': secret, 'qr_data_uri': qr_data_uri(uri)}
+            elif action == 'enable':
+                secret = credential.get_secret(pending=True)
+                if not secret or not verify_totp(secret, data.get('code', '')):
+                    raise OperationError('Код не совпал. Проверьте время на устройстве и попробуйте снова.')
+                credential.set_secret(secret)
+                credential.set_secret('', pending=True)
+                credential.enabled = True
+                credential.save(update_fields=['encrypted_secret', 'encrypted_pending_secret', 'enabled', 'updated_at'])
+                result = 'Двухфакторная защита включена.'
+            elif action == 'disable':
+                secret = credential.get_secret()
+                if not credential.enabled or not secret:
+                    raise OperationError('Двухфакторная защита не подключена.')
+                if not verify_totp(secret, data.get('code', '')):
+                    raise OperationError('Неверный одноразовый код.')
+                credential.enabled = False
+                credential.set_secret('')
+                credential.set_secret('', pending=True)
+                credential.save(update_fields=['encrypted_secret', 'encrypted_pending_secret', 'enabled', 'updated_at'])
+                result = 'Двухфакторная защита отключена.'
+            elif action == 'cancel':
+                credential.set_secret('', pending=True)
+                credential.save(update_fields=['encrypted_pending_secret', 'updated_at'])
+                result = 'Настройка двухфакторной защиты отменена.'
+            else:
+                raise OperationError('Неизвестное действие 2FA.')
+        elif resource == 'hosts':
             action = data.get('action', '')
             if action == 'create':
                 result = manager.create(data)
@@ -216,8 +292,8 @@ def api(request, resource):
             result = 'Срок хранения журналов сохранён.'
         else:
             return JsonResponse({'error': 'Неизвестный ресурс.'}, status=404)
-        record(request, action, target, server=server)
-        return JsonResponse({'ok': True, 'message': result})
+        record(request, 'two_factor_' + action if resource == 'two-factor' else action, target, server=server)
+        return JsonResponse(result if isinstance(result, dict) else {'ok': True, 'message': result})
     except (OperationError, ValueError, TypeError, AttributeError, OSError, portalocker.exceptions.LockException) as error:
         if request.method == 'POST':
             record(request, str(action), target, False, str(error), server)

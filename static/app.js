@@ -7,6 +7,7 @@ const icon = (name, extra = '') => `<i data-lucide="${name}" ${extra}></i>`;
 const number = (value, digits = 1) => Number(value || 0).toLocaleString('ru-RU', {maximumFractionDigits: digits});
 const time = (value) => new Date(value).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access', overview: null, trafficTop: [], trafficFetchedAt: 0, config: null, editor: null, charts: {}, busy: false, polling: false, logContent: '', logSources: []};
+let twoFactorEnabled = false;
 Object.assign(state, {servers: [], serverId: sessionStorage.getItem('snc-server') || 'local', serverRevision: null, generation: 0, switching: false, serverReady: false, inventoryLoaded: false, editingServer: null});
 const titles = {
   servers: ['Серверы nginx', 'NGINX / SERVER CONNECTIONS', 'Серверы'],
@@ -22,7 +23,7 @@ const titles = {
 function icons() { lucide.createIcons(); }
 
 async function request(resource, data, parameters = {}) {
-  const scoped = !['servers', 'password', 'settings'].includes(resource);
+  const scoped = !['servers', 'password', 'settings', 'two-factor'].includes(resource);
   const generation = state.generation;
   const search = new URLSearchParams(parameters);
   if (scoped) search.set('server', state.serverId);
@@ -294,16 +295,13 @@ function renderTrafficTop(result) {
 
 async function refreshTrafficTop() {
   try {
-    renderTrafficTop(await request('traffic'));
+    const traffic = await request('traffic');
+    state.trafficFetchedAt = Date.now();
+    renderTrafficTop(traffic);
   } catch (error) {
     if (error.stale) return;
     query('#top-traffic-period').textContent = 'Трафик access log';
     query('#top-traffic-list').textContent = `Не удалось загрузить рейтинг: ${error.message}`;
-  } finally {
-      if (traffic) {
-        state.trafficFetchedAt = Date.now();
-        renderTrafficTop(traffic);
-      }
   }
 }
 
@@ -328,6 +326,82 @@ async function refreshLogRetentionSettings() {
   const result = await request('settings');
   query('#log-retention-days').value = result.log_retention_days;
   query('#log-retention-result').hidden = true;
+}
+
+function ensureTwoFactorSettings() {
+  if (query('#two-factor-toggle')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section two-factor-settings';
+  section.innerHTML = '<div class="section-heading"><h2>Двухфакторная защита</h2><i data-lucide="shield-check" class="text-cyan"></i></div><div class="settings-details"><div><dt>Статус</dt><dd id="two-factor-status">Загрузка</dd></div></div><p class="muted small">TOTP-коды Google Authenticator проверяются локально.</p><div id="two-factor-result" class="operation-result" hidden></div><button class="button" type="button" id="two-factor-toggle"><i data-lucide="scan-line"></i><span id="two-factor-toggle-label">Подключить 2FA</span></button>';
+  query('#view-settings .settings-layout').append(section);
+
+  const dialog = document.createElement('dialog');
+  dialog.id = 'two-factor-dialog';
+  dialog.className = 'modal two-factor-modal';
+  dialog.innerHTML = '<div class="modal-heading"><h2 id="two-factor-title">Подключить 2FA</h2><button class="icon-button" type="button" id="two-factor-close" title="Закрыть" aria-label="Закрыть"><i data-lucide="x"></i></button></div><p id="two-factor-instructions" class="muted small">Отсканируйте QR-код в Google Authenticator, затем введите шестизначный код из приложения.</p><div id="two-factor-qr-wrap" class="two-factor-qr-wrap"><img id="two-factor-qr" alt="QR-код Google Authenticator"></div><label id="two-factor-secret-label">Секретный ключ для резервной настройки<input id="two-factor-secret" type="text" readonly spellcheck="false"></label><p id="two-factor-service-note" class="muted small">Используется стандарт TOTP otpauth://; секрет хранится зашифрованным и не отправляется сторонним сервисам.</p><form id="two-factor-form"><label>Одноразовый код<input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required></label><div id="two-factor-error" class="form-error" role="alert" hidden></div><div class="modal-footer"><button class="button" type="button" id="two-factor-cancel">Отмена</button><button class="button primary" id="two-factor-submit" type="submit">Подключить</button></div></form>';
+  document.body.append(dialog);
+
+  const closeDialog = (event) => {
+    if (twoFactorEnabled || !query('#two-factor-secret').value) {
+      dialog.close();
+      return;
+    }
+    runAction(event?.currentTarget, async () => {
+      await request('two-factor', {action: 'cancel'});
+      query('#two-factor-secret').value = '';
+      dialog.close();
+    }, '#two-factor-error');
+  };
+  query('#two-factor-close').addEventListener('click', closeDialog);
+  query('#two-factor-cancel').addEventListener('click', closeDialog);
+  dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
+
+  query('#two-factor-toggle').addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+    query('#two-factor-error').hidden = true;
+    query('#two-factor-form').reset();
+    if (twoFactorEnabled) {
+      query('#two-factor-title').textContent = 'Отключить 2FA';
+      query('#two-factor-instructions').textContent = 'Введите текущий код, чтобы отключить второй фактор.';
+      query('#two-factor-qr-wrap').hidden = true;
+      query('#two-factor-secret-label').hidden = true;
+      query('#two-factor-service-note').hidden = true;
+      query('#two-factor-submit').textContent = 'Отключить';
+    } else {
+      const enrollment = await request('two-factor', {action: 'begin'});
+      query('#two-factor-title').textContent = 'Подключить 2FA';
+      query('#two-factor-instructions').textContent = 'Отсканируйте QR-код в Google Authenticator, затем введите шестизначный код из приложения.';
+      query('#two-factor-qr').src = enrollment.qr_data_uri;
+      query('#two-factor-secret').value = enrollment.secret;
+      query('#two-factor-qr-wrap').hidden = false;
+      query('#two-factor-secret-label').hidden = false;
+      query('#two-factor-service-note').hidden = false;
+      query('#two-factor-submit').textContent = 'Подключить';
+    }
+    dialog.showModal();
+  }, '#two-factor-error'));
+
+  query('#two-factor-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const action = twoFactorEnabled ? 'disable' : 'enable';
+      const result = await request('two-factor', {action, code: new FormData(event.currentTarget).get('code')});
+      dialog.close();
+      query('#two-factor-secret').value = '';
+      toast(result.message);
+      await refreshTwoFactorSettings();
+    }, '#two-factor-error');
+  });
+  icons();
+}
+
+async function refreshTwoFactorSettings() {
+  ensureTwoFactorSettings();
+  const result = await request('two-factor');
+  twoFactorEnabled = result.enabled;
+  query('#two-factor-status').textContent = twoFactorEnabled ? 'Подключена' : 'Не подключена';
+  query('#two-factor-toggle-label').textContent = twoFactorEnabled ? 'Отключить 2FA' : 'Подключить 2FA';
+  query('#two-factor-toggle').classList.toggle('danger', twoFactorEnabled);
+  query('#two-factor-result').hidden = true;
 }
 
 async function refreshOverview() {
@@ -364,7 +438,7 @@ async function route() {
     if (next === 'logs') await loadLogs();
     if (next === 'config') await loadConfig();
     if (next === 'audit') await loadAudit();
-    if (next === 'settings') await refreshLogRetentionSettings();
+    if (next === 'settings') await Promise.all([refreshLogRetentionSettings(), refreshTwoFactorSettings()]);
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }
 
