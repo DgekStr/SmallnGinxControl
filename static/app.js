@@ -124,7 +124,8 @@ function renderHosts() {
   const kind = state.view === 'proxies' ? 'proxy' : 'host';
   const items = state.hosts.filter((item) => item.kind === kind)
     .filter((item) => state.filter === 'all' || item.enabled === (state.filter === 'enabled'))
-    .filter((item) => `${item.name} ${item.target} ${item.id} ${item.domains.join(' ')}`.toLowerCase().includes(state.search));
+    .filter((item) => `${item.name} ${item.target} ${item.id} ${item.domains.join(' ')}`.toLowerCase().includes(state.search))
+    .sort((left, right) => left.name.localeCompare(right.name, 'ru', {sensitivity: 'base'}));
   query('#hosts-table').innerHTML = hostTable(items);
   query('#overview-hosts').innerHTML = hostTable(state.hosts.slice(0, 6));
   query('#table-count').textContent = `Показано ${items.length} из ${state.hosts.filter((item) => item.kind === kind).length}`;

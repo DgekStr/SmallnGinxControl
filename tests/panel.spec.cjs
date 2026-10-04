@@ -116,6 +116,15 @@ test('certificate expiry is shown only for HTTPS hosts', async ({page}) => {
   await expect(http.locator('.certificate-expiry')).toHaveCount(0);
 });
 
+test('hosts and proxies are sorted alphabetically', async ({page}) => {
+  await login(page);
+  for (const view of ['hosts', 'proxies']) {
+    await page.locator(`[data-view="${view}"]`).click();
+    const names = await page.locator('#hosts-table .domain-name').allTextContents();
+    expect(names).toEqual([...names].sort((left, right) => left.localeCompare(right, 'ru', {sensitivity: 'base'})));
+  }
+});
+
 test('main config, reload confirmation and audit', async ({page}) => {
   await login(page);
   await page.locator('[data-view="config"]').click();
