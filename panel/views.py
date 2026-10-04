@@ -150,6 +150,8 @@ def api(request, resource):
         if request.method == 'GET':
             if resource == 'overview':
                 return JsonResponse({'server': server.host, 'server_id': server.pk, 'server_name': server.name, 'mode': server.mode, 'nginx': manager.status(), 'metrics': snapshot(server)})
+            if resource == 'traffic':
+                return JsonResponse(manager.traffic_top())
             if resource == 'hosts':
                 return JsonResponse(manager.inventory())
             if resource == 'config':

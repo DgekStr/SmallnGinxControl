@@ -181,3 +181,22 @@ class NginxTests(SimpleTestCase):
         self.assertEqual(result['sources'], [])
         self.assertIn('error_log off', result['content'])
         self.assertNotIn('Просмотр недоступен', result['content'])
+
+    def test_traffic_top_ranks_active_vhosts_by_access_log_bytes(self):
+        logs_root = self.manager.root / 'http'
+        logs_root.mkdir()
+        entries = {'alpha.test': [900, 500], 'beta.test': [200], 'gamma.test': [700]}
+        for name, byte_counts in entries.items():
+            log = logs_root / name / 'access.log'
+            log.parent.mkdir()
+            log.write_text(''.join(f'127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 {size} "-" "test"\n' for size in byte_counts))
+            config = self.manager.root / 'conf.d' / f'{name}.conf'
+            config.write_text(f'server {{ listen 80; server_name {name}; access_log {log}; location / {{ proxy_pass http://127.0.0.1:3000; }} }}')
+        disabled = self.manager.root / 'conf.d' / 'disabled.test.conf'
+        disabled.write_text(f'server {{ listen 80; server_name disabled.test; access_log {logs_root / "alpha.test" / "access.log"}; }}')
+        disabled_item = next(item for item in self.manager.inventory()['items'] if item['id'] == 'conf.d/disabled.test.conf')
+        self.manager.toggle(disabled_item['id'], False, disabled_item['revision'])
+        manager = NginxManager(extra_log_roots=[logs_root])
+        result = manager.traffic_top()
+        self.assertEqual([item['name'] for item in result['items']], ['alpha.test', 'gamma.test', 'beta.test'])
+        self.assertEqual([item['bytes'] for item in result['items']], [1400, 700, 200])

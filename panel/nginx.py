@@ -12,8 +12,8 @@ import portalocker
 from django.conf import settings
 
 from .transactions import (
-    OperationError, apply_transaction, atomic_write, delete_config_transaction,
-    has_proxy_server, is_allowed_log_path,
+    OperationError, access_log_traffic_bytes, apply_transaction, atomic_write,
+    delete_config_transaction, has_proxy_server, is_allowed_log_path,
     is_maintenance_config, maintenance_backup_path, render_maintenance_config,
 )
 
@@ -367,6 +367,22 @@ class NginxManager:
                 if name in item['domains']:
                     raise OperationError('Такой домен уже есть в конфигурации.')
             return apply_transaction(lambda: atomic_write(path, content.encode()), lambda: path.unlink(missing_ok=True), self.validate, self.reload)
+
+    def traffic_top(self, limit=5):
+        totals = []
+        for item in self.inventory()['items']:
+            if not item['enabled'] or item['maintenance']:
+                continue
+            try:
+                nodes = self.parse(self.path(item['id']))
+            except (OperationError, OSError, UnicodeError):
+                continue
+            paths, _ = configured_log_paths(nodes, 'access')
+            total = sum(access_log_traffic_bytes(path, self.allowed_log_roots) for path in paths)
+            if total:
+                totals.append({'name': item['name'], 'kind': item['kind'], 'bytes': total})
+        totals.sort(key=lambda entry: (-entry['bytes'], entry['name'].casefold()))
+        return {'items': totals[:max(1, min(5, limit))], 'sample_bytes_per_log': 128 * 1024}
 
     def logs(self, identifier='', kind='access', lines=150):
         if kind not in {'access', 'error'}:

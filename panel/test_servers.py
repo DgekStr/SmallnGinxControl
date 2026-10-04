@@ -87,6 +87,26 @@ class ServerTests(TestCase):
             denied = worker.logs(['/etc/passwd'], 10)
             self.assertIn('outside allowed root', denied['content'])
 
+    def test_remote_worker_traffic_top_ranks_active_vhosts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            extra_root = root / 'http'
+            configs = []
+            for name, sent in [('alpha.test', 900), ('beta.test', 300)]:
+                log = extra_root / name / 'access.log'
+                log.parent.mkdir(parents=True)
+                log.write_text(f'127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 {sent} "-" "test"\n')
+                path = root / 'conf.d' / f'{name}.conf'
+                content = f'server {{\n    listen 80;\n    server_name {name};\n    access_log {log};\n    location / {{\n        proxy_pass http://127.0.0.1:3000;\n    }}\n}}\n'
+                path.write_text(content)
+                configs.append({'id': f'conf.d/{name}.conf', 'content': content, 'enabled': True, 'maintenance': False})
+            worker = RemoteWorker(root, root / 'logs', root / 'state', log_roots=[extra_root])
+            with patch.object(worker, 'inventory', return_value={'configs': configs, 'warnings': []}):
+                result = worker.traffic_top()
+            self.assertEqual([item['name'] for item in result['items']], ['alpha.test', 'beta.test'])
+            self.assertEqual([item['bytes'] for item in result['items']], [900, 300])
+
     def test_remote_worker_deletes_only_disabled_hosts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 
@@ -36,6 +38,15 @@ class AuthenticationTests(TestCase):
         user = get_user_model().objects.create_user('viewer', password='test')
         self.client.force_login(user)
         self.assertEqual(self.client.get('/api/hosts/').status_code, 403)
+
+    def test_traffic_top_endpoint_is_authenticated_and_returns_ranked_items(self):
+        self.client.force_login(self.user)
+        ranked = {'items': [{'name': 'busy.test', 'kind': 'proxy', 'bytes': 4096}], 'sample_bytes_per_log': 128 * 1024}
+        with patch('panel.views.manager_for') as manager_for:
+            manager_for.return_value.traffic_top.return_value = ranked
+            response = self.client.get('/api/traffic/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), ranked)
 
     def test_service_requires_post_and_explicit_confirmation(self):
         self.client.force_login(self.user)

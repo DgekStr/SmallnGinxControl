@@ -52,7 +52,7 @@ def initialize():
         ('staging.focuslens.dev', 'proxy', 'http://192.168.0.24:8080', False, False),
         ('status.focuslens.dev', 'host', '/var/www/status', True, True),
     ]
-    for name, kind, target, enabled, tls in sites:
+    for site_index, (name, kind, target, enabled, tls) in enumerate(sites):
         manager.create({'name': name, 'kind': kind, 'target': target, 'port': 80})
         path = manager.root / 'conf.d' / (name + '.conf')
         if tls:
@@ -60,7 +60,7 @@ def initialize():
             atomic_write(path, content.encode())
         if not enabled:
             path.rename(path.with_name(path.name + '.disabled'))
-        access = '\n'.join(f'192.168.0.{40 + number % 12} - - [04/Oct/2026:12:{number:02d}:18 +0300] "GET {"/api/health" if kind == "proxy" else "/"} HTTP/2.0" {"404" if number % 13 == 0 else "200"} {1024 + number * 41} "-" "Mozilla/5.0"' for number in range(30)) + '\n'
+        access = '\n'.join(f'192.168.0.{40 + number % 12} - - [04/Oct/2026:12:{number:02d}:18 +0300] "GET {"/api/health" if kind == "proxy" else "/"} HTTP/2.0" {"404" if number % 13 == 0 else "200"} {1024 + number * 41 + (len(sites) - site_index) * 5000} "-" "Mozilla/5.0"' for number in range(30)) + '\n'
         atomic_write(manager.logs_root / (name + '.conf.access.log'), access.encode())
         atomic_write(manager.logs_root / (name + '.conf.error.log'), b'')
     atomic_write(manager.logs_root / 'access.log', access.encode())

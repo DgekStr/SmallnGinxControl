@@ -13,6 +13,10 @@ test('overview renders assets, metrics and responsive layouts', async ({page}) =
   page.on('pageerror', (error) => errors.push(error.message));
   await login(page);
   await expect(page.locator('#metric-uptime')).toContainText('дн');
+  await expect(page.locator('#top-traffic-list .traffic-rank')).toHaveCount(5);
+  const trafficBytes = await page.locator('#top-traffic-list .traffic-rank').evaluateAll((rows) => rows.map((row) => Number(row.dataset.bytes)));
+  expect(trafficBytes).toEqual([...trafficBytes].sort((left, right) => right - left));
+  expect(trafficBytes[0]).toBeGreaterThan(trafficBytes[trafficBytes.length - 1]);
   await expect(page.locator('#global-error')).toBeHidden();
   for (const [width, height] of [[1440, 1000], [390, 844], [320, 740]]) {
     await page.setViewportSize({width, height});

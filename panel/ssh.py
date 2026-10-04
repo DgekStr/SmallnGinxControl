@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import socket
+import zlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -45,8 +46,8 @@ def probe_fingerprint(host, port):
 def worker_command():
     folder = Path(__file__).parent
     source = (folder / 'transactions.py').read_text(encoding='utf-8') + '\n' + (folder / 'remote_worker.py').read_text(encoding='utf-8')
-    encoded = base64.b64encode(source.encode()).decode()
-    return 'python3 -c \'import base64;exec(compile(base64.b64decode("' + encoded + '"),"<smallnginxcontrol>","exec"))\''
+    encoded = base64.b64encode(zlib.compress(source.encode(), 9)).decode()
+    return 'python3 -c \'import base64,zlib;exec(compile(zlib.decompress(base64.b64decode("' + encoded + '")),"<smallnginxcontrol>","exec"))\''
 
 
 class SSHManager:
@@ -132,6 +133,9 @@ class SSHManager:
 
     def delete(self, identifier, expected_revision):
         return self.rpc('delete', {'id': identifier, 'revision': expected_revision})
+
+    def traffic_top(self):
+        return self.rpc('traffic')
 
     def service(self, action):
         if action not in {'test', 'reload', 'restart'}:

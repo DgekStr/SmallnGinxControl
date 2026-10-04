@@ -11,6 +11,7 @@ class OperationError(Exception):
 
 MAINTENANCE_MARKER = '# smallnginxcontrol-maintenance'
 MAINTENANCE_URI = '/__smallnginxcontrol_maintenance.html'
+ACCESS_LOG_BYTES_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:\s|$)')
 
 
 def atomic_write(path, content):
@@ -45,6 +46,21 @@ def is_allowed_log_path(candidate, roots):
         return any(resolved.is_relative_to(Path(root).resolve()) for root in roots)
     except (OSError, RuntimeError):
         return False
+
+
+def access_log_traffic_bytes(candidate, roots, sample_size=128 * 1024):
+    if not is_allowed_log_path(candidate, roots):
+        return 0
+    path = Path(candidate)
+    try:
+        if not path.is_file():
+            return 0
+        with path.open('rb') as stream:
+            stream.seek(max(0, path.stat().st_size - sample_size))
+            content = stream.read(sample_size)
+    except OSError:
+        return 0
+    return sum(int(match.group(1)) for match in ACCESS_LOG_BYTES_PATTERN.finditer(content) if match.group(1) != b'-')
 
 
 def is_maintenance_config(content):

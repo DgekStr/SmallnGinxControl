@@ -10,6 +10,7 @@ Git tag: `v1.0`
 
 - Единая русскоязычная панель управления nginx с обзором метрик, хостов, reverse proxy, конфигураций, журналов и аудита.
 - Изолированные профили нескольких серверов; удалённые операции через SSH с закреплённым SHA256 host fingerprint.
+- TOP-5 активных vhost по bytes-sent: горизонтальные бары, ранжирование по access-log traffic отдельно для выбранного nginx-сервера.
 - Локальная аутентификация Django, смена пароля, CSRF, ограничение попыток входа, зашифрованное хранение SSH-секретов.
 - Проверка активной конфигурации реальным `nginx -t`, транзакционная запись, резервные копии и откат при ошибках проверки/reload.
 - Обратимый maintenance-режим для стандартного reverse proxy: HTTP 503 и `/var/www/html/maitenance.html`; исходный конфиг восстанавливается байт-в-байт.
@@ -23,6 +24,7 @@ Git tag: `v1.0`
 - Django backend tests и Playwright E2E на Chrome.
 - `manage.py check` и `node --check static/app.js`.
 - Production-приёмка на Ubuntu: systemd active, HTTPS endpoint отвечает, nginx config test успешен, API без сессии возвращает 401.
+- Демо access logs содержат разные объёмы bytes для проверки ранжирования и визуальных полос.
 - Сгенерированный maintenance-вариант production virtual host прошёл изолированный `nginx -t`; действующий сайт не переключался во время release-проверки.
 
 ## Установка

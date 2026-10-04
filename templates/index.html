@@ -6,10 +6,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Обзор | SmallnGinxControl</title>
   <link rel="icon" href="{% static 'brand.png' %}">
-  <link rel="stylesheet" href="{% static 'app.css' %}?v=multiserver-1">
+  <link rel="stylesheet" href="{% static 'app.css' %}?v=multiserver-2">
+  <link rel="stylesheet" href="{% static 'traffic.css' %}?v=1">
   <script src="{% static 'vendor/lucide.js' %}" defer></script>
   <script src="{% static 'vendor/chart.js' %}" defer></script>
-  <script src="{% static 'app.js' %}?v=multiserver-3" defer></script>
+  <script src="{% static 'app.js' %}?v=multiserver-4" defer></script>
 </head>
 <body data-mode="{% if demo %}demo{% else %}local{% endif %}">
   <aside class="sidebar" id="sidebar">
@@ -54,6 +55,7 @@
           <section class="traffic-section"><div class="section-heading"><div><h2>Сетевая активность</h2><span class="muted small" id="metric-period">Ожидание данных</span></div><select id="chart-range" aria-label="Период графика"><option value="30">30 минут</option><option value="15">15 минут</option><option value="5">5 минут</option></select></div><div class="chart-legend"><span><b class="legend-dot cyan"></b>Получено <strong id="rx-rate">—</strong></span><span><b class="legend-dot violet"></b>Отправлено <strong id="tx-rate">—</strong></span><span class="chart-unit">МБ/с</span></div><div class="chart-container"><canvas id="traffic-chart" role="img" aria-label="Полученный и отправленный трафик за последние 30 минут"></canvas></div></section>
           <section class="health-section"><div class="section-heading"><h2>Состояние системы</h2><span class="badge success" id="health-badge">…</span></div><div class="resource-heading"><span><i data-lucide="cpu"></i>Процессор</span><strong id="current-cpu">—</strong></div><div class="progress-track"><div id="cpu-bar" class="cyan-bar"></div></div><div class="resource-heading"><span><i data-lucide="memory-stick"></i>Оперативная память</span><strong id="current-memory">—</strong></div><div class="progress-track"><div id="memory-bar" class="violet-bar"></div></div><dl class="system-details"><div><dt>Сервис</dt><dd id="nginx-version">nginx</dd></div><div><dt>Активные конфигурации</dt><dd id="active-hosts">—</dd></div><div><dt>Интерфейс</dt><dd id="network-interface">—</dd></div><div><dt>Обновлено</dt><dd id="last-update">—</dd></div></dl></section>
         </div>
+        <section class="traffic-top-section"><div class="section-heading"><div><h2>TOP-5 по трафику</h2><span class="muted small" id="top-traffic-period">По access logs активных виртуальных хостов</span></div><button class="icon-button outlined" id="refresh-traffic-top" title="Обновить рейтинг трафика" aria-label="Обновить рейтинг трафика"><i data-lucide="refresh-cw"></i></button></div><div id="top-traffic-list" aria-live="polite"><div class="traffic-top-empty">Загрузка…</div></div></section>
         <section class="hosts-section"><div class="section-heading"><div class="heading-inline"><h2>Конфигурации сервера</h2><span class="count-label" id="overview-host-count">0</span></div><a class="text-link" href="#hosts">Все хосты<i data-lucide="arrow-up-right"></i></a></div><div id="overview-hosts"></div></section>
       </section>
       <section id="view-hosts" class="view" hidden><div class="table-toolbar"><div class="segmented" id="host-filter"><button class="selected" data-filter="all">Все</button><button data-filter="enabled">Включены</button><button data-filter="disabled">Отключены</button></div><div class="toolbar-actions"><label class="search-field"><i data-lucide="search"></i><input id="host-search" placeholder="Найти домен или upstream…" aria-label="Поиск хостов"></label><button class="button primary" id="add-host"><i data-lucide="plus"></i>Добавить</button></div></div><div id="inventory-warnings" class="warning-list" hidden></div><div id="hosts-table"></div><div class="table-footer"><span id="table-count"></span><span>Единица управления: файл конфигурации</span></div></section>

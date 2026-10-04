@@ -6,7 +6,7 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character
 const icon = (name, extra = '') => `<i data-lucide="${name}" ${extra}></i>`;
 const number = (value, digits = 1) => Number(value || 0).toLocaleString('ru-RU', {maximumFractionDigits: digits});
 const time = (value) => new Date(value).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access', overview: null, config: null, editor: null, charts: {}, busy: false, polling: false, logContent: ''};
+const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access', overview: null, trafficTop: [], trafficFetchedAt: 0, config: null, editor: null, charts: {}, busy: false, polling: false, logContent: ''};
 Object.assign(state, {servers: [], serverId: sessionStorage.getItem('snc-server') || 'local', serverRevision: null, generation: 0, switching: false, serverReady: false, inventoryLoaded: false, editingServer: null});
 const titles = {
   servers: ['Серверы nginx', 'NGINX / SERVER CONNECTIONS', 'Серверы'],
@@ -209,6 +209,43 @@ function renderMetrics() {
   }
 }
 
+function trafficSize(bytes) {
+  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  let value = Number(bytes) || 0;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  return `${number(value, value < 10 ? 1 : 0)} ${units[unit]}`;
+}
+
+function renderTrafficTop(result) {
+  const items = result.items || [];
+  const container = query('#top-traffic-list');
+  state.trafficTop = items;
+  query('#top-traffic-period').textContent = `Последние ${trafficSize(result.sample_bytes_per_log)} каждого access log`;
+  if (!items.length) {
+    container.innerHTML = '<div class="traffic-top-empty">Нет данных access log для активных виртуальных хостов.</div>';
+    return;
+  }
+  const maximum = Math.max(1, items[0].bytes);
+  container.innerHTML = items.map((item, index) => {
+    const width = Math.max(2, item.bytes / maximum * 100);
+    const kind = item.kind === 'proxy' ? 'Reverse proxy' : 'Виртуальный хост';
+    return `<div class="traffic-rank" data-bytes="${item.bytes}"><div class="traffic-rank-host"><span class="traffic-rank-number">0${index + 1}</span><span class="traffic-rank-name"><strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong><small>${kind}</small></span></div><div class="traffic-rank-track"><span class="traffic-rank-fill rank-${index + 1}" style="width:${width}%"></span></div><strong class="traffic-rank-value">${trafficSize(item.bytes)}</strong></div>`;
+  }).join('');
+}
+
+async function refreshTrafficTop() {
+  try {
+    renderTrafficTop(await request('traffic'));
+  } catch (error) {
+    if (error.stale) return;
+    query('#top-traffic-period').textContent = 'Трафик access log';
+    query('#top-traffic-list').textContent = `Не удалось загрузить рейтинг: ${error.message}`;
+  } finally {
+    state.trafficFetchedAt = Date.now();
+  }
+}
+
 async function refreshOverview() {
   state.overview = await request('overview');
   state.serverReady = state.inventoryLoaded;
@@ -238,7 +275,7 @@ async function route() {
   closeMenu();
   try {
     if (next === 'servers') await refreshServers();
-    if (next === 'overview') { Object.values(state.charts).forEach((chart) => chart.resize()); renderMetrics(); }
+    if (next === 'overview') { Object.values(state.charts).forEach((chart) => chart.resize()); renderMetrics(); await refreshTrafficTop(); }
     if (next === 'hosts' || next === 'proxies') renderHosts();
     if (next === 'logs') await loadLogs();
     if (next === 'config') await loadConfig();
@@ -410,6 +447,7 @@ query('#download-logs').addEventListener('click', () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 query('#chart-range').addEventListener('change', renderMetrics);
+query('#refresh-traffic-top').addEventListener('click', (event) => runAction(event.currentTarget, refreshTrafficTop));
 query('#theme-toggle').addEventListener('click', () => {
   const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = theme;
@@ -477,6 +515,8 @@ async function refreshServers() {
 
 function clearServerData() {
   state.hosts = [];
+  state.trafficTop = [];
+  state.trafficFetchedAt = 0;
   state.overview = state.config = state.editor = null;
   state.serverReady = state.inventoryLoaded = false;
   state.logContent = '';
@@ -490,6 +530,8 @@ function clearServerData() {
   query('#config-state').textContent = 'Загрузка';
   query('#config-result').hidden = true;
   query('#inventory-warnings').hidden = true;
+  query('#top-traffic-period').textContent = 'По access logs активных виртуальных хостов';
+  query('#top-traffic-list').innerHTML = '<div class="traffic-top-empty">Загрузка…</div>';
   query('#config-revision').textContent = '';
   for (const id of ['metric-uptime', 'metric-cpu', 'metric-lan', 'metric-rx', 'metric-tx', 'current-cpu', 'current-memory', 'rx-rate', 'tx-rate', 'network-interface', 'last-update', 'nginx-version']) query('#' + id).textContent = '—';
   query('#cpu-caption').textContent = 'За период наблюдения';
@@ -521,6 +563,7 @@ async function loadServerContext(identifier) {
   try {
     await refreshHosts();
     await refreshOverview();
+    if (state.view === 'overview') await refreshTrafficTop();
     if (state.view === 'config') await loadConfig();
     if (state.view === 'logs') await loadLogs();
     if (state.view === 'audit') await loadAudit();
@@ -637,6 +680,7 @@ async function initialize() {
     try {
       await refreshOverview();
       if (++ticks % 6 === 0) { await refreshHosts(); await refreshServers(); }
+      if (state.view === 'overview' && Date.now() - state.trafficFetchedAt >= 60000) await refreshTrafficTop();
       if (state.view === 'logs' && query('#log-live').checked) await loadLogs();
     } catch (error) {
       if (error.stale) return;

@@ -11,8 +11,8 @@ from pathlib import Path
 
 if __package__:
     from .transactions import (
-        OperationError, apply_transaction, atomic_write, delete_config_transaction,
-        has_proxy_server, is_allowed_log_path,
+        OperationError, access_log_traffic_bytes, apply_transaction, atomic_write,
+        delete_config_transaction, has_proxy_server, is_allowed_log_path,
         is_maintenance_config, maintenance_backup_path, render_maintenance_config,
     )
 
@@ -225,6 +225,25 @@ class RemoteWorker:
             stored.unlink()
         return 'Host deleted from nginx; a configuration backup was saved'
 
+    def traffic_top(self, limit=5):
+        totals = []
+        for config in self.inventory()['configs']:
+            if not config['enabled'] or config.get('maintenance'):
+                continue
+            content = re.sub(r'(?m)^\s*#.*$', '', config['content'])
+            raw_paths = re.findall(r'(?m)^\s*access_log\s+(?:"([^"]+)"|\'([^\']+)\'|([^;\s]+))', content)
+            paths = list(dict.fromkeys(next(value for value in match if value) for match in raw_paths))
+            paths = [path for path in paths if path.lower() != 'off']
+            total = sum(access_log_traffic_bytes(path, self.allowed_log_roots) for path in paths)
+            if not total:
+                continue
+            names = re.findall(r'(?m)^\s*server_name\s+([^;]+);', content)
+            name = names[0].split()[0] if names else Path(config['id']).stem
+            kind = 'proxy' if re.search(r'\bproxy_pass\b', content) else 'host'
+            totals.append({'name': name, 'kind': kind, 'bytes': total})
+        totals.sort(key=lambda entry: (-entry['bytes'], entry['name'].casefold()))
+        return {'items': totals[:max(1, min(5, limit))], 'sample_bytes_per_log': 128 * 1024}
+
     def logs(self, candidates, lines):
         output, sources = [], []
         for candidate in dict.fromkeys(candidates):
@@ -271,6 +290,8 @@ class RemoteWorker:
             return self.read(data['id'])
         if operation == 'logs':
             return self.logs(data['paths'], data['lines'])
+        if operation == 'traffic':
+            return self.traffic_top()
         if operation == 'delete':
             with self.lock():
                 path = self.path(data['id'])
