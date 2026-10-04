@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>SmallnGinxControl v1.0.1</title>
+  <style>
+    @font-face{font-family:Manrope;src:url('../static/vendor/manrope-latin.woff2') format('woff2');font-weight:200 800;font-display:swap}
+    @font-face{font-family:Manrope;src:url('../static/vendor/manrope-cyrillic.woff2') format('woff2');font-weight:200 800;font-display:swap;unicode-range:U+0400-04FF}
+    :root{--ink:#172521;--muted:#64746f;--paper:#f4f6f2;--panel:#fff;--line:#d9e0da;--green:#176c54;--lime:#d8ef9b;--coral:#d86f54;--code:#152521;font-family:Manrope,'Segoe UI',sans-serif;color:var(--ink);background:var(--paper)}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% 2%,#dcebdc 0,transparent 32rem),linear-gradient(135deg,#f6f7f1,#edf2ed 58%,#f6f4ef);font-size:16px;line-height:1.65}a{color:var(--green);text-underline-offset:3px}header,main,footer{width:min(1120px,calc(100% - 48px));margin:auto}header{padding:28px 0;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}.brand{font-weight:800}.tag{font-size:13px;font-weight:700;color:var(--green);border:1px solid #afcbbd;padding:6px 10px;border-radius:3px}main{padding:42px 0 72px}.hero{display:grid;grid-template-columns:1fr 300px;gap:42px;align-items:end;padding:28px 0 46px}.eyebrow{text-transform:uppercase;color:var(--green);font-size:12px;font-weight:800}.hero h1{font-size:clamp(36px,5vw,62px);line-height:1.05;margin:14px 0 18px;max-width:760px}.hero p{font-size:18px;color:#455851;max-width:690px;margin:0}.release-mark{background:var(--code);color:#eef5ed;padding:22px;border-left:5px solid var(--lime)}.release-mark strong{display:block;font-size:29px}.release-mark span{font-size:13px;color:#bdd0c7}.shot{display:block;width:100%;height:auto;border:1px solid var(--line);box-shadow:0 16px 38px #1a322012}.caption{font-size:13px;color:var(--muted);margin:10px 0 42px}.section{padding:34px 0;border-top:1px solid var(--line)}.section h2{font-size:25px;line-height:1.2;margin:0 0 18px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.item{background:var(--panel);padding:20px;border:1px solid var(--line);border-top:3px solid var(--green)}.item h3{margin:0 0 8px;font-size:17px}.item p{margin:0;color:var(--muted);font-size:14px}.status{font-family:ui-monospace,Consolas,monospace;background:var(--code);color:#eaf4e6;padding:18px 20px;overflow-wrap:anywhere}.screens{display:grid;grid-template-columns:1.5fr 1fr;gap:18px;align-items:start}.screens img{width:100%;height:auto;border:1px solid var(--line)}.note{border-left:4px solid var(--coral);padding:4px 0 4px 16px;color:#48564f}footer{padding:22px 0 36px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);display:flex;justify-content:space-between;gap:20px}@media(max-width:720px){header,main,footer{width:min(100% - 32px,560px)}.hero,.grid,.screens{grid-template-columns:1fr}.hero{gap:24px;padding-top:22px}.release-mark{max-width:340px}.hero h1{font-size:40px}footer{display:block}footer span{display:block;margin:4px 0}}
+  </style>
+</head>
+<body>
+  <header><a class="brand" href="../README.md">SmallnGinxControl</a><span class="tag">RELEASE v1.0.1</span></header>
+  <main>
+    <section class="hero">
+      <div><div class="eyebrow">Nginx operations · self-hosted</div><h1>Логи и трафик каждого хоста под контролем.</h1><p>Per-host access logs, настраиваемое хранение и TOP-5 по bytes-sent для выбранного nginx-сервера.</p></div>
+      <aside class="release-mark"><strong>v1.0.1</strong><span>Релиз · 04 октября 2026</span><br><a href="release-v1.0.1.md" style="color:#d8ef9b">Release notes</a></aside>
+    </section>
+    <img class="shot" src="images/overview.png" alt="Обзор SmallnGinxControl с TOP-5 traffic chart">
+    <p class="caption">TOP-5 активных виртуальных хостов, отсортированных по отданным байтам access log.</p>
+    <section class="section"><h2>Изменения v1.0.1</h2><div class="grid">
+      <article class="item"><h3>Логи каждого vhost</h3><p>Active и disabled host configs получают отдельный `/var/log/nginx/&lt;host&gt;-data.log`.</p></article>
+      <article class="item"><h3>Настраиваемый retention</h3><p>Срок хранения от 1 до 3650 дней задаётся в Settings; cleanup запускается ежедневным systemd timer.</p></article>
+      <article class="item"><h3>TOP-5 traffic</h3><p>Горизонтальные полосы ранжируют активные vhost по access-log bytes-sent.</p></article>
+    </div></section>
+    <section class="section"><h2>Операционные сценарии</h2><div class="screens"><div><img src="images/proxies-maintenance.png" alt="Reverse proxy в режиме обслуживания"><p class="caption">Обратимый maintenance-mode</p></div><div><img src="images/servers-mobile.png" alt="Панель серверов на мобильном экране"><p class="caption">Multi-server на мобильном экране</p></div></div></section>
+    <section class="section"><h2>Проверки</h2><p class="status">55 backend tests · 7 Playwright E2E<br>systemd active · HTTPS 200 · nginx -t successful</p><p class="note">TOP-5 считает распознаваемый status/bytes field из последних 128 KiB каждого access log. Это sampled log traffic, не точный интерфейсный RX/TX за фиксированный временной интервал.</p><p>Установка: <a href="deployment.md">git clone deployment guide</a> · <a href="https://github.com/DgekStr/SmallnGinxControl/releases/tag/v1.0.1">GitHub release v1.0.1</a></p></section>
+  </main>
+  <footer><span>SmallnGinxControl · v1.0.1</span><span>Доступ только доверенным администраторам.</span></footer>
+</body>
+</html>

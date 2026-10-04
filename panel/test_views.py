@@ -48,6 +48,17 @@ class AuthenticationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), ranked)
 
+    def test_log_retention_setting_is_persisted_and_validated(self):
+        self.client.force_login(self.user)
+        response = self.client.get('/api/settings/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['log_retention_days'], 30)
+        response = self.client.post('/api/settings/', {'log_retention_days': 45}, content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get('/api/settings/').json()['log_retention_days'], 45)
+        response = self.client.post('/api/settings/', {'log_retention_days': 0}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+
     def test_service_requires_post_and_explicit_confirmation(self):
         self.client.force_login(self.user)
         self.assertEqual(self.client.get('/api/service/').status_code, 404)

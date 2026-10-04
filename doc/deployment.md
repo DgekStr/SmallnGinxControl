@@ -16,7 +16,7 @@ Production-установка клонирует версионированны�
 Сначала убедитесь, что `/opt/smallnginxcontrol`, `/etc/smallnginxcontrol.env` и systemd unit ещё не существуют. Установщик отказывается перезаписывать найденную установку.
 
 ```sh
-git clone --depth 1 --branch v1.0 https://github.com/DgekStr/SmallnGinxControl.git /opt/smallnginxcontrol
+git clone --depth 1 --branch v1.0.1 https://github.com/DgekStr/SmallnGinxControl.git /opt/smallnginxcontrol
 cd /opt/smallnginxcontrol
 sudo ./deploy/install.sh
 ```
@@ -63,13 +63,14 @@ SNC_SECURE_COOKIES=1
 cd /opt/smallnginxcontrol
 git status --short
 git fetch --tags origin
-git checkout v1.0
+git checkout v1.0.1
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python manage.py migrate --noinput
 .venv/bin/python manage.py collectstatic --noinput
 .venv/bin/python manage.py check
 systemctl restart smallnginxcontrol
 systemctl is-active smallnginxcontrol
+systemctl enable --now smallnginxcontrol-log-cleanup.timer
 ```
 
 Если в каталоге есть локальные изменения, сначала сохраните их отдельно и не выполняйте `git reset --hard`.
@@ -81,6 +82,10 @@ systemctl is-active smallnginxcontrol
 Журналы читаются по директивам `access_log`/`error_log` из `$SNC_LOG_ROOT` и дополнительных абсолютных корней из `SNC_LOG_EXTRA_ROOTS` (по умолчанию `/var/http`). Для SSH-серверов этот список передаётся remote worker; SSH-пользователь должен иметь право читать указанные файлы. Динамические пути и пути вне разрешённых roots остаются заблокированы.
 
 Удаление vhost доступно только после его отключения и явного подтверждения. Удаляются стандартный конфиг из `conf.d` или `sites-available` и относящиеся к нему `sites-enabled` links; активные vhost API отклоняет. Перед удалением создаётся резервная копия, затем выполняются `nginx -t` и reload с rollback при ошибке. Backup удалённого/исходного конфига сохраняется в `$SNC_STATE_DIR/backups`; удалённые backup автоматически не очищаются. Нестандартные include удалить из UI нельзя.
+
+## Логи и retention
+
+В `Настройки → Хранение логов` задаётся срок 1–3650 дней (по умолчанию 30). `smallnginxcontrol-log-cleanup.timer` запускается ежедневно примерно в 03:17: активные `/var/log/nginx/*-data.log` ротируются, nginx получает reopen, а архивы старше срока хранения удаляются. Другие журналы nginx команда не трогает. Проверка расписания: `systemctl list-timers smallnginxcontrol-log-cleanup.timer`; журнал работы: `journalctl -u smallnginxcontrol-log-cleanup.service`.
 
 Не редактируйте один nginx-файл параллельно через панель, shell, Certbot и другие средства. Перед production-операциями изучите конфиг, его include и журналы; сначала используйте `nginx -t`.
 

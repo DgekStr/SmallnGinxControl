@@ -221,6 +221,10 @@ test('unavailable SSH profile never falls back to local server', async ({page}) 
 test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
+  await expect(page.locator('#log-retention-days')).toHaveValue('30');
+  await page.locator('#log-retention-days').fill('45');
+  await page.locator('#log-retention-form button[type="submit"]').click();
+  await expect(page.locator('#log-retention-result')).toContainText('Срок хранения журналов сохранён');
   await page.locator('[name="old_password"]').fill('12345');
   await page.locator('[name="new_password1"]').fill('Demo-Changed-2026!Secure');
   await page.locator('[name="new_password2"]').fill('Demo-Changed-2026!Secure');

@@ -22,7 +22,7 @@ const titles = {
 function icons() { lucide.createIcons(); }
 
 async function request(resource, data, parameters = {}) {
-  const scoped = !['servers', 'password'].includes(resource);
+  const scoped = !['servers', 'password', 'settings'].includes(resource);
   const generation = state.generation;
   const search = new URLSearchParams(parameters);
   if (scoped) search.set('server', state.serverId);
@@ -246,6 +246,29 @@ async function refreshTrafficTop() {
   }
 }
 
+function ensureLogRetentionForm() {
+  if (query('#log-retention-form')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section log-retention-section';
+  section.innerHTML = '<div class="section-heading"><h2>Хранение логов</h2><i data-lucide="archive"></i></div><form id="log-retention-form"><label>Срок хранения, дней<input id="log-retention-days" name="log_retention_days" type="number" min="1" max="3650" step="1" required></label><p class="muted small">Хостовые access-логи ротируются и очищаются ежедневно.</p><div id="log-retention-result" class="operation-result" hidden></div><button class="button primary" type="submit"><i data-lucide="save"></i>Сохранить срок</button></form>';
+  query('#view-settings .settings-layout').append(section);
+  section.querySelector('#log-retention-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const result = await request('settings', {log_retention_days: Number(query('#log-retention-days').value)});
+      showResult('#log-retention-result', result.message, true);
+    }, '#log-retention-result');
+  });
+  icons();
+}
+
+async function refreshLogRetentionSettings() {
+  ensureLogRetentionForm();
+  const result = await request('settings');
+  query('#log-retention-days').value = result.log_retention_days;
+  query('#log-retention-result').hidden = true;
+}
+
 async function refreshOverview() {
   state.overview = await request('overview');
   state.serverReady = state.inventoryLoaded;
@@ -280,6 +303,7 @@ async function route() {
     if (next === 'logs') await loadLogs();
     if (next === 'config') await loadConfig();
     if (next === 'audit') await loadAudit();
+    if (next === 'settings') await refreshLogRetentionSettings();
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }
 
@@ -304,7 +328,7 @@ async function loadConfig() {
 
 async function loadAudit() {
   const response = await request('audit');
-  const names = {login: 'Вход', logout: 'Выход', password_change: 'Смена пароля', save_config: 'Изменение конфигурации', create: 'Создание хоста', toggle: 'Переключение хоста', reload: 'Применение nginx', restart: 'Перезапуск nginx', test: 'Проверка nginx', demo_initialized: 'Инициализация демо'};
+  const names = {login: 'Вход', logout: 'Выход', password_change: 'Смена пароля', settings_update: 'Срок хранения логов', save_config: 'Изменение конфигурации', create: 'Создание хоста', toggle: 'Переключение хоста', reload: 'Применение nginx', restart: 'Перезапуск nginx', test: 'Проверка nginx', demo_initialized: 'Инициализация демо'};
   Object.assign(names, {server_create: 'Добавление сервера', server_update: 'Изменение сервера', server_delete: 'Удаление подключения', server_test: 'Проверка соединения'});
   query('#audit-table').innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>ВРЕМЯ</th><th>ПОЛЬЗОВАТЕЛЬ</th><th>ОПЕРАЦИЯ</th><th>ОБЪЕКТ</th><th>РЕЗУЛЬТАТ</th></tr></thead><tbody>${response.events.map((event) => `<tr><td class="mono muted">${escapeHtml(new Date(event.created_at).toLocaleString('ru-RU'))}</td><td>${escapeHtml(event.actor)}</td><td class="audit-action">${escapeHtml(names[event.action] || event.action)}</td><td class="audit-target" title="${escapeHtml(event.target)}">${escapeHtml(event.target || '—')}${event.detail ? `<div class="audit-detail">${escapeHtml(event.detail)}</div>` : ''}</td><td><span class="badge ${event.success ? 'success' : 'error'}">${event.success ? 'Выполнено' : 'Ошибка'}</span></td></tr>`).join('') || '<tr><td colspan="5" class="empty-state">История пуста.</td></tr>'}</tbody></table></div>`;
 }

@@ -1,0 +1,12 @@
+[Unit]
+Description=Rotate and prune SmallnGinxControl per-host nginx logs
+After=nginx.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/smallnginxcontrol
+EnvironmentFile=/etc/smallnginxcontrol.env
+ExecStart=/opt/smallnginxcontrol/.venv/bin/python /opt/smallnginxcontrol/manage.py cleanup_host_logs
+UMask=0027

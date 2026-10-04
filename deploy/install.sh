@@ -7,17 +7,19 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
 fi
 
 REPOSITORY=${SNC_REPOSITORY:-https://github.com/DgekStr/SmallnGinxControl.git}
-RELEASE_TAG=${SNC_RELEASE_TAG:-v1.0}
+RELEASE_TAG=${SNC_RELEASE_TAG:-v1.0.1}
 INSTALL_DIR=${SNC_INSTALL_DIR:-/opt/smallnginxcontrol}
 ENV_FILE=/etc/smallnginxcontrol.env
 SERVICE_FILE=/etc/systemd/system/smallnginxcontrol.service
+CLEANUP_SERVICE_FILE=/etc/systemd/system/smallnginxcontrol-log-cleanup.service
+CLEANUP_TIMER_FILE=/etc/systemd/system/smallnginxcontrol-log-cleanup.timer
 STATE_DIR=/var/lib/smallnginxcontrol
 
 if [[ ! $INSTALL_DIR =~ ^/[A-Za-z0-9_./-]+$ || $INSTALL_DIR == / || $INSTALL_DIR == *..* ]]; then
     echo 'SNC_INSTALL_DIR must be a simple absolute path without spaces or parent references.' >&2
     exit 1
 fi
-if [[ -e $ENV_FILE || -e $SERVICE_FILE ]]; then
+if [[ -e $ENV_FILE || -e $SERVICE_FILE || -e $CLEANUP_SERVICE_FILE || -e $CLEANUP_TIMER_FILE ]]; then
     echo 'Service configuration already exists; refusing to overwrite it.' >&2
     exit 1
 fi
@@ -74,6 +76,11 @@ service_temp=$(mktemp)
 sed "s|/opt/smallnginxcontrol|$INSTALL_DIR|g" "$INSTALL_DIR/deploy/smallnginxcontrol.service" > "$service_temp"
 install -o root -g root -m 0644 "$service_temp" "$SERVICE_FILE"
 rm -f "$service_temp"
+cleanup_service_temp=$(mktemp)
+sed "s|/opt/smallnginxcontrol|$INSTALL_DIR|g" "$INSTALL_DIR/deploy/smallnginxcontrol-log-cleanup.service" > "$cleanup_service_temp"
+install -o root -g root -m 0644 "$cleanup_service_temp" "$CLEANUP_SERVICE_FILE"
+rm -f "$cleanup_service_temp"
+install -o root -g root -m 0644 "$INSTALL_DIR/deploy/smallnginxcontrol-log-cleanup.timer" "$CLEANUP_TIMER_FILE"
 
 set -a
 . "$ENV_FILE"
@@ -88,6 +95,7 @@ unset SNC_INITIAL_PASSWORD
 
 systemctl daemon-reload
 systemctl enable --now smallnginxcontrol
+systemctl enable --now smallnginxcontrol-log-cleanup.timer
 systemctl --no-pager --full status smallnginxcontrol
 
 printf '\nInstalled %s (%s).\n' "$INSTALL_DIR" "$RELEASE_TAG"

@@ -18,7 +18,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .metrics import snapshot
-from .models import AuditEvent, LoginAttempt, MetricSample, Server
+from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting
 from .servers import AddressForm, ServerForm, initialize_demo, manager_for, public_server, selected_server
 from .transactions import OperationError
 
@@ -141,13 +141,16 @@ def api(request, resource):
     try:
         if resource == 'servers' and request.method == 'GET':
             return JsonResponse({'servers': [public_server(item) for item in Server.objects.all()]})
-        if resource not in {'servers', 'password'}:
+        if resource not in {'servers', 'password', 'settings'}:
             server = selected_server(request.GET.get('server'))
             expected_profile = request.GET.get('server_revision')
             if (expected_profile is not None or request.method == 'POST') and expected_profile != server.updated_at.isoformat():
                 raise OperationError('Профиль сервера изменён или не подтверждён. Обновите страницу перед операцией.')
             manager = manager_for(server)
         if request.method == 'GET':
+            if resource == 'settings':
+                service_settings = ServiceSetting.get_solo()
+                return JsonResponse({'log_retention_days': service_settings.log_retention_days})
             if resource == 'overview':
                 return JsonResponse({'server': server.host, 'server_id': server.pk, 'server_name': server.name, 'mode': server.mode, 'nginx': manager.status(), 'metrics': snapshot(server)})
             if resource == 'traffic':
@@ -201,6 +204,16 @@ def api(request, resource):
             user = form.save()
             update_session_auth_hash(request, user)
             result = 'Пароль изменён.'
+        elif resource == 'settings':
+            action = 'settings_update'
+            retention_days = data.get('log_retention_days')
+            if type(retention_days) is not int or not 1 <= retention_days <= 3650:
+                raise OperationError('Срок хранения должен быть целым числом от 1 до 3650 дней.')
+            service_settings = ServiceSetting.get_solo()
+            service_settings.log_retention_days = retention_days
+            service_settings.save(update_fields=['log_retention_days', 'updated_at'])
+            target = 'log_retention_days'
+            result = 'Срок хранения журналов сохранён.'
         else:
             return JsonResponse({'error': 'Неизвестный ресурс.'}, status=404)
         record(request, action, target, server=server)

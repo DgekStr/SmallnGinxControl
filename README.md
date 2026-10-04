@@ -1,8 +1,8 @@
-# SmallnGinxControl v1.0
+# SmallnGinxControl v1.0.1
 
 Русскоязычная self-hosted панель для управления одним или несколькими nginx-серверами. Django/Waitress обслуживают интерфейс и API; локальные и удалённые серверы управляются через nginx CLI или проверенный SSH. Статика, шрифты и графики поставляются локально, Docker и Node.js на production-сервере не нужны.
 
-**Актуальный релиз: v1.0.** Русский интерфейс, светлая и тёмная темы, адаптивная навигация. В релиз входят управление vhost/reverse proxy, конфигурациями, журналами, метриками, профилями SSH и обратимый maintenance-режим для отключённого proxy.
+**Актуальный релиз: v1.0.1.** Русский интерфейс, светлая и тёмная темы, адаптивная навигация. В релиз входят управление vhost/reverse proxy, per-host logging и retention, TOP-5 трафика, конфигурациями, журналами и профилями SSH.
 
 ![Обзор сервера](doc/images/overview.png)
 
@@ -15,7 +15,7 @@
 ```powershell
 git clone https://github.com/DgekStr/SmallnGinxControl.git
 Set-Location SmallnGinxControl
-git checkout v1.0
+git checkout v1.0.1
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe bootstrap.py
@@ -40,9 +40,9 @@ python serve.py
 ssh -N -L 7444:127.0.0.1:7444 USER@SERVER_IP
 ```
 
-Оставьте SSH-сеанс открытым и на клиенте перейдите на http://127.0.0.1:7444. Для постоянного доступа по сети установите production-сервис из `v1.0`; оставьте приложение на loopback, поставьте перед ним HTTPS reverse-proxy и ограничьте доступ firewall. Подробности: [HTTPS и deployment](doc/deployment.md#https-доступ).
+Оставьте SSH-сеанс открытым и на клиенте перейдите на http://127.0.0.1:7444. Для постоянного доступа по сети установите production-сервис из `v1.0.1`; оставьте приложение на loopback, поставьте перед ним HTTPS reverse-proxy и ограничьте доступ firewall. Подробности: [HTTPS и deployment](doc/deployment.md#https-доступ).
 
-Для установки Linux-сервиса из опубликованного git-тега используйте [deploy/install.sh](deploy/install.sh) или пошаговую [инструкцию](doc/deployment.md). Установщик запускается от root, клонирует тег v1.0, создаёт production state вне репозитория и запрашивает пароль администратора только в терминале. По умолчанию приложение доступно через SSH-туннель, без открытого HTTP-порта.
+Для установки Linux-сервиса из опубликованного git-тега используйте [deploy/install.sh](deploy/install.sh) или пошаговую [инструкцию](doc/deployment.md). Установщик запускается от root, клонирует тег v1.0.1, создаёт production state вне репозитория и запрашивает пароль администратора только в терминале. По умолчанию приложение доступно через SSH-туннель, без открытого HTTP-порта.
 
 Production требует Python 3.12+, systemd и nginx. Допускается отдельный TLS reverse-proxy перед loopback upstream. Для частного IP self-signed сертификат не будет автоматически доверенным браузером; для публично доверенного TLS используйте DNS-имя и сертификат от доверенного CA.
 
@@ -54,6 +54,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 - Хешированные пароли, сессии Django, CSRF, ограничение попыток входа, POST-выход.
 - Uptime дней/часов, пики CPU и LAN, текущая CPU/RAM, RX/TX в МБ и скорости в МБ/с.
 - TOP-5 активных vhost/reverse proxy по отданным bytes-sent из access logs, с убывающими горизонтальными графиками.
+- Срок хранения host logs задаётся в Настройках; ежедневный systemd timer ротирует и очищает только `*-data.log`.
 - Хосты и reverse proxy, поиск домена/пути/upstream, фильтры состояния.
 - Добавление HTTP-сайта или HTTP(S)-upstream, отдельные журналы.
 - Включение/отключение стандартных sites-available/sites-enabled и conf.d/*.conf; reverse proxy при отключении переходит в режим обслуживания с `maitenance.html`.
@@ -113,14 +114,14 @@ npm run test:e2e
 
 В Windows тесты используют установленный Google Chrome; браузер можно выбрать через SNC_TEST_BROWSER. В Linux предварительно выполнить `npx playwright install chromium`. Тесты запускаются в отдельной локальной демосреде; рабочее демо не меняют. Готовые ресурсы находятся в static/vendor, Node.js нужен только для их обновления и тестов. Изображение static/brand.png взято из предоставленного проекта CRM/focuslens-site/assets/logo_dark_tile.png. Лицензии библиотек сохранены рядом с ресурсами.
 
-Проверки релиза v1.0: backend-тесты Django, Playwright в Chrome, `manage.py check`, `node --check static/app.js`. Production-приёмка выполнена на отдельном Ubuntu-хосте: systemd active, HTTPS reverse-proxy отвечает, nginx syntax test успешен, API требует вход. Maintenance renderer проверен на production virtual host в изолированном тесте, без переключения действующего сайта. Подробности и ограничения: [release notes](doc/release-v1.0.md), [HTML-описание](doc/release-v1.0.html), [production deployment](doc/deployment.md).
+Проверки v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention и TOP-5 sampled traffic. Подробности и ограничения: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
 
 
 ## Документы
 
 - [Сравнение GitHub-решений](doc/research-2026-10-04.md)
 - [Развёртывание из git clone](doc/deployment.md)
-- [Release v1.0](doc/release-v1.0.md)
+- [Release v1.0.1](doc/release-v1.0.1.md)
 - [Roadmap и readiness](doc/roadmap-2026-10-04.md)
 
 Панель предназначена для доверенного администратора. Произвольное редактирование nginx-конфигов с root-процессом даёт root-эквивалентные возможности. Не публиковать в Интернет без HTTPS, сильного пароля и сетевого ограничения. Предпочтительный старт: loopback + SSH-туннель.

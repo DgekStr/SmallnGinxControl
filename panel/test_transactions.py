@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from panel.transactions import OperationError, apply_transaction, atomic_write
+from panel.transactions import OperationError, apply_transaction, atomic_write, configure_host_access_logs
 
 
 class TransactionTests(unittest.TestCase):
@@ -45,3 +45,34 @@ class TransactionTests(unittest.TestCase):
             atomic_write(target, b'new')
             self.assertEqual(target.read_bytes(), b'new')
             self.assertEqual(list(Path(directory).iterdir()), [target])
+
+    def test_per_host_access_logs_cover_server_and_location_off(self):
+        content = (
+            'server {\n'
+            '    server_name alpha.test www.alpha.test;\n'
+            '    access_log off;\n'
+            '    location /private/ { access_log off; }\n'
+            '    location /custom/ { access_log /var/log/nginx/old.log combined; }\n'
+            '}\n'
+            'server {\n'
+            '    server_name beta.test;\n'
+            '}\n'
+        )
+        rendered, changed = configure_host_access_logs(content, 'fallback', '/var/log/nginx')
+        text = rendered.decode()
+        self.assertEqual(changed, ['alpha.test', 'beta.test'])
+        self.assertNotIn('access_log off;', text)
+        self.assertIn('access_log /var/log/nginx/alpha.test-data.log;', text)
+        self.assertIn('access_log /var/log/nginx/beta.test-data.log;', text)
+        self.assertIn('access_log /var/log/nginx/old.log combined;', text)
+        rerendered, changed_again = configure_host_access_logs(rendered, 'fallback', '/var/log/nginx')
+        self.assertEqual(rerendered, rendered)
+        self.assertEqual(changed_again, [])
+
+    def test_per_host_log_name_is_bounded_for_long_server_name(self):
+        host = 'a' * 220 + '.example.test'
+        content = f'server {{\n server_name {host};\n}}\n'
+        rendered, changed = configure_host_access_logs(content, 'fallback', '/var/log/nginx')
+        log_path = next(token for token in rendered.decode().split() if token.startswith('/var/log/nginx/'))
+        self.assertLess(len(Path(log_path).name), 255)
+        self.assertEqual(len(changed), 1)

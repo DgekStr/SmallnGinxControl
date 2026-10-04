@@ -13,7 +13,7 @@ from django.conf import settings
 
 from .transactions import (
     OperationError, access_log_traffic_bytes, apply_transaction, atomic_write,
-    delete_config_transaction, has_proxy_server, is_allowed_log_path,
+    configure_host_access_logs, delete_config_transaction, has_proxy_server, is_allowed_log_path,
     is_maintenance_config, maintenance_backup_path, render_maintenance_config,
 )
 
@@ -325,6 +325,47 @@ class NginxManager:
                 stored.unlink()
             return 'Хост удалён из nginx. Резервная копия конфигурации сохранена.'
 
+    def enable_host_logging(self, *, dry_run=True):
+        with self.lock():
+            plans, hosts = {}, set()
+            for item in self.inventory()['items']:
+                if not item['toggleable']:
+                    continue
+                identifier = item['id']
+                path = self.path(identifier)
+                original = path.read_bytes()
+                updated, changed_hosts = configure_host_access_logs(original, path.stem, self.logs_root)
+                if updated != original:
+                    self.syntax(updated.decode('utf-8'))
+                    plans[path] = (identifier, original, updated)
+                    hosts.update(changed_hosts)
+                if item['maintenance']:
+                    stored = self.maintenance_backup(identifier)
+                    if stored.is_file():
+                        stored_original = stored.read_bytes()
+                        stored_updated, stored_hosts = configure_host_access_logs(stored_original, path.stem, self.logs_root)
+                        if stored_updated != stored_original:
+                            self.syntax(stored_updated.decode('utf-8'))
+                            plans[stored] = (identifier + '.maintenance-original', stored_original, stored_updated)
+                            hosts.update(stored_hosts)
+            summary = {'files': len(plans), 'hosts': len(hosts), 'host_names': sorted(hosts)}
+            if dry_run or not plans:
+                return summary
+            for identifier, original, _ in plans.values():
+                self.backup(identifier, original)
+
+            def change():
+                for path, (_, _, updated) in plans.items():
+                    atomic_write(path, updated)
+
+            def rollback():
+                for path, (_, original, _) in plans.items():
+                    atomic_write(path, original)
+
+            self.validate()
+            apply_transaction(change, rollback, self.validate, self.reload)
+            return summary
+
     def render_site(self, data, log_root=None):
         name = data.get('name', '').strip().lower()
         if len(name) > 190 or not re.fullmatch(r'(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', name):
@@ -353,7 +394,8 @@ class NginxManager:
             raise OperationError('Неизвестный тип хоста.')
         filename = name.replace('*', 'wildcard') + '.conf'
         log_root = self.logs_root.as_posix() if log_root is None else log_root.rstrip('/')
-        content = f'server {{\n    listen {port};\n    server_name {name};\n    access_log {log_root}/{filename}.access.log;\n    error_log {log_root}/{filename}.error.log warn;\n\n    location / {{\n        {location}\n    }}\n}}\n'
+        log_name = name.replace('*', 'wildcard')
+        content = f'server {{\n    listen {port};\n    server_name {name};\n    access_log {log_root}/{log_name}-data.log;\n    error_log {log_root}/{filename}.error.log warn;\n\n    location / {{\n        {location}\n    }}\n}}\n'
         self.syntax(content)
         return name, filename, content
 

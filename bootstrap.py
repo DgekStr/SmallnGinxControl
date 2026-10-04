@@ -61,7 +61,7 @@ def initialize():
         if not enabled:
             path.rename(path.with_name(path.name + '.disabled'))
         access = '\n'.join(f'192.168.0.{40 + number % 12} - - [04/Oct/2026:12:{number:02d}:18 +0300] "GET {"/api/health" if kind == "proxy" else "/"} HTTP/2.0" {"404" if number % 13 == 0 else "200"} {1024 + number * 41 + (len(sites) - site_index) * 5000} "-" "Mozilla/5.0"' for number in range(30)) + '\n'
-        atomic_write(manager.logs_root / (name + '.conf.access.log'), access.encode())
+        atomic_write(manager.logs_root / (name + '-data.log'), access.encode())
         atomic_write(manager.logs_root / (name + '.conf.error.log'), b'')
     atomic_write(manager.logs_root / 'access.log', access.encode())
     atomic_write(manager.logs_root / 'error.log', b'2026/10/04 12:00:00 [notice] 1234#1234: signal process started\n')

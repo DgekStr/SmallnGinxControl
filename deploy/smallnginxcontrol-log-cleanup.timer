@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily retention cleanup for per-host nginx logs
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=5m
+Unit=smallnginxcontrol-log-cleanup.service
+
+[Install]
+WantedBy=timers.target

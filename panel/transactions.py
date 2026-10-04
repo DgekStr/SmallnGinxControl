@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -96,6 +97,145 @@ def _nginx_mask(content):
             masked[index] = ' '
             quote = character
     return ''.join(masked)
+
+
+def _matching_brace(masked, opening, limit):
+    depth = 1
+    for index in range(opening + 1, limit):
+        if masked[index] == '{':
+            depth += 1
+        elif masked[index] == '}':
+            depth -= 1
+            if depth == 0:
+                return index
+    raise OperationError('В nginx-конфигурации не закрыт блок server.')
+
+
+def _argument_span(content, start, limit):
+    while start < limit and content[start].isspace():
+        start += 1
+    if start >= limit or content[start] == ';':
+        return start, start, ''
+    quote = content[start] if content[start] in {'"', "'"} else ''
+    end = start + 1 if quote else start
+    escaped = False
+    while end < limit:
+        character = content[end]
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == '\\':
+                escaped = True
+            elif character == quote:
+                end += 1
+                break
+        elif character.isspace() or character == ';':
+            break
+        end += 1
+    raw = content[start:end]
+    return start, end, raw[1:-1] if quote and raw.endswith(quote) else raw
+
+
+def _nginx_block_scopes(masked, opening, closing):
+    stack = [opening]
+    scopes = {}
+    for index in range(opening + 1, closing):
+        if masked[index] == '{':
+            stack.append(index)
+        elif masked[index] == '}':
+            scopes[stack.pop()] = index
+    scopes[opening] = closing
+    return scopes
+
+
+def configure_host_access_logs(content, fallback_name, log_root='/var/log/nginx'):
+    text = content.decode('utf-8') if isinstance(content, bytes) else content
+    masked = _nginx_mask(text)
+    root = Path(log_root).as_posix().rstrip('/')
+    replacements = []
+    insertions = []
+    changed_hosts = []
+    block_number = 0
+
+    for server_match in re.finditer(r'(?<![\w-])server\s*\{', masked):
+        opening = masked.find('{', server_match.start(), server_match.end())
+        closing = _matching_brace(masked, opening, len(masked))
+        block_number += 1
+        scopes = _nginx_block_scopes(masked, opening, closing)
+
+        server_names = []
+        for match in re.finditer(r'(?<![\w-])server_name\s+', masked[opening + 1:closing]):
+            position = opening + 1 + match.start()
+            scope = max((start for start, end in scopes.items() if start < position < end), default=opening)
+            if scope != opening:
+                continue
+            directive_end = opening + 1 + match.end()
+            semicolon = masked.find(';', directive_end, closing)
+            if semicolon < 0:
+                raise OperationError('Директива server_name не завершена точкой с запятой.')
+            try:
+                server_names.extend(shlex.split(text[directive_end:semicolon], comments=False, posix=True))
+            except ValueError as error:
+                raise OperationError(f'Не удалось разобрать server_name: {error}') from error
+
+        host = next((name for name in server_names if name != '_' and not name.startswith(('~', '$')) and '$' not in name), '')
+        if not host:
+            host = f'{fallback_name}-{block_number}'
+        elif host.startswith('*.'):
+            host = 'wildcard.' + host[2:]
+        safe_host = re.sub(r'[^a-zA-Z0-9_.-]+', '-', host).strip('.-_').lower() or f'host-{block_number}'
+        if len(safe_host) > 200:
+            safe_host = safe_host[:180].rstrip('.-_') + '-' + hashlib.sha256(host.encode('utf-8')).hexdigest()[:12]
+        target = f'{root}/{safe_host}-data.log'
+
+        log_directives = []
+        for match in re.finditer(r'(?<![\w-])access_log\s+', masked[opening + 1:closing]):
+            position = opening + 1 + match.start()
+            directive_end = opening + 1 + match.end()
+            semicolon = masked.find(';', directive_end, closing)
+            if semicolon < 0:
+                raise OperationError('Директива access_log не завершена точкой с запятой.')
+            arg_start, arg_end, first_arg = _argument_span(text, directive_end, semicolon)
+            scope = max((start for start, end in scopes.items() if start < position < end), default=opening)
+            log_directives.append((scope, position, semicolon + 1, arg_start, arg_end, first_arg))
+
+        by_scope = {}
+        for directive in log_directives:
+            by_scope.setdefault(directive[0], []).append(directive)
+        if opening not in by_scope:
+            by_scope[opening] = []
+
+        host_changed = False
+        for scope, directives in by_scope.items():
+            matching = [item for item in directives if item[5] == target]
+            disabled = [item for item in directives if item[5].lower() == 'off']
+            if disabled:
+                if matching:
+                    replacements.extend((item[1], item[2], '') for item in disabled)
+                else:
+                    first_off = disabled[0]
+                    replacements.append((first_off[3], first_off[4], target))
+                    replacements.extend((item[1], item[2], '') for item in disabled[1:])
+                host_changed = True
+            elif not matching:
+                scope_end = scopes[scope]
+                line_start = text.rfind('\n', 0, scope_end) + 1
+                closing_indent = re.match(r'[ \t]*', text[line_start:scope_end]).group()
+                directive_indent = closing_indent + '    '
+                if text[line_start:scope_end].strip():
+                    insertions.append((scope_end, f'\n{directive_indent}access_log {target};\n{closing_indent}'))
+                else:
+                    insertions.append((line_start, f'{directive_indent}access_log {target};\n'))
+                host_changed = True
+        if host_changed:
+            changed_hosts.append(host)
+
+    edits = [(position, position, insertion) for position, insertion in insertions]
+    edits.extend(replacements)
+    for start, end, replacement in sorted(edits, key=lambda edit: edit[0], reverse=True):
+        text = text[:start] + replacement + text[end:]
+    result = text.encode('utf-8')
+    return result, changed_hosts
 
 
 def _proxy_server_closings(masked):

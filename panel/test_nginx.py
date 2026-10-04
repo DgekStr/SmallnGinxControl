@@ -200,3 +200,19 @@ class NginxTests(SimpleTestCase):
         result = manager.traffic_top()
         self.assertEqual([item['name'] for item in result['items']], ['alpha.test', 'gamma.test', 'beta.test'])
         self.assertEqual([item['bytes'] for item in result['items']], [1400, 700, 200])
+
+    def test_enable_host_logging_updates_enabled_and_disabled_configs(self):
+        active = self.manager.root / 'conf.d' / 'active.test.conf'
+        disabled = self.manager.root / 'conf.d' / 'disabled.test.conf.disabled'
+        active.write_text('server { server_name active.test; access_log off; }\n')
+        disabled.write_text('server { server_name disabled.test; }\n')
+        preview = self.manager.enable_host_logging(dry_run=True)
+        self.assertEqual(preview['files'], 2)
+        self.assertIn('access_log off', active.read_text())
+        self.assertNotIn('active.test-data.log', active.read_text())
+        with patch.object(self.manager, 'validate', return_value='ok'), patch.object(self.manager, 'reload'):
+            applied = self.manager.enable_host_logging(dry_run=False)
+        self.assertEqual(applied, preview)
+        self.assertNotIn('access_log off', active.read_text())
+        self.assertIn('active.test-data.log', active.read_text())
+        self.assertIn('disabled.test-data.log', disabled.read_text())
