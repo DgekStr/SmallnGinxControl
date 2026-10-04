@@ -56,6 +56,7 @@ SNC_MODE=local
 SNC_STATE_DIR=$STATE_DIR
 SNC_NGINX_ROOT=/etc/nginx
 SNC_LOG_ROOT=/var/log/nginx
+SNC_LOG_EXTRA_ROOTS=/var/http
 SNC_MAINTENANCE_ROOT=/var/www/html
 SNC_NGINX_BIN=/usr/sbin/nginx
 SNC_SERVER=$PANEL_HOST

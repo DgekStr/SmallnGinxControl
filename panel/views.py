@@ -176,6 +176,8 @@ def api(request, resource):
                 if type(data.get('enabled')) is not bool:
                     raise OperationError('Состояние должно быть true или false.')
                 result = manager.toggle(target, data['enabled'], data.get('revision'))
+            elif action == 'delete':
+                result = manager.delete(target, data.get('revision'))
             elif action == 'reload':
                 manager.read(target)
                 result = manager.service('reload')

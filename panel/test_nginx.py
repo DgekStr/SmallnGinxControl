@@ -54,6 +54,41 @@ class NginxTests(SimpleTestCase):
         self.assertFalse(item['maintenance'])
         self.assertTrue((self.manager.root / 'conf.d' / 'static.test.conf.disabled').is_file())
 
+    def test_delete_requires_disabled_host_and_removes_disabled_config(self):
+        self.manager.create({'name': 'delete.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        with self.assertRaisesRegex(OperationError, 'Сначала отключите'):
+            self.manager.delete(item['id'], item['revision'])
+        self.assertTrue((self.manager.root / item['id']).is_file())
+        self.manager.toggle(item['id'], False, item['revision'])
+        item = self.manager.inventory()['items'][0]
+        result = self.manager.delete(item['id'], item['revision'])
+        self.assertIn('удалён из nginx', result)
+        self.assertEqual(self.manager.inventory()['items'], [])
+        self.assertTrue(list((self.manager.state / 'backups').glob('*.bak')))
+
+    def test_delete_maintenance_proxy_clears_saved_original(self):
+        self.manager.create({'name': 'maintenance-delete.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        self.manager.toggle(item['id'], False, item['revision'])
+        item = self.manager.inventory()['items'][0]
+        stored = self.manager.maintenance_backup(item['id'])
+        self.assertTrue(stored.is_file())
+        self.manager.delete(item['id'], item['revision'])
+        self.assertFalse(stored.exists())
+        self.assertEqual(self.manager.inventory()['items'], [])
+
+    def test_delete_rolls_back_when_validation_fails(self):
+        self.manager.create({'name': 'rollback-delete.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        self.manager.toggle(item['id'], False, item['revision'])
+        item = self.manager.inventory()['items'][0]
+        with patch.object(self.manager, 'validate', side_effect=OperationError('invalid config')):
+            with self.assertRaisesRegex(OperationError, 'invalid config'):
+                self.manager.delete(item['id'], item['revision'])
+        self.assertTrue((self.manager.root / item['id']).is_file())
+        self.assertEqual(len(self.manager.inventory()['items']), 1)
+
     def test_proxy_maintenance_requires_page(self):
         self.manager.create({'name': 'missing.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80})
         item = self.manager.inventory()['items'][0]
@@ -118,3 +153,31 @@ class NginxTests(SimpleTestCase):
         config = self.manager.root / 'conf.d' / 'unsafe.conf'
         config.write_text('server { access_log /etc/passwd; }')
         self.assertIn('вне разрешённого', self.manager.logs('conf.d/unsafe.conf')['content'])
+
+    def test_logs_read_from_configured_extra_root(self):
+        extra_root = self.manager.root / 'http'
+        host_logs = extra_root / 'example.test'
+        host_logs.mkdir(parents=True)
+        (host_logs / 'access.log').write_text('127.0.0.1 GET / 200\n')
+        config = self.manager.root / 'conf.d' / 'host-logs.conf'
+        config.write_text(f'server {{ access_log {host_logs}/access.log; server_name example.test; }}')
+        manager = NginxManager(extra_log_roots=[extra_root])
+        result = manager.logs('conf.d/host-logs.conf', 'access')
+        self.assertIn('GET / 200', result['content'])
+        self.assertEqual(result['sources'], [str(host_logs / 'access.log')])
+
+    def test_access_log_off_is_reported_as_disabled(self):
+        config = self.manager.root / 'conf.d' / 'access-off.conf'
+        config.write_text('server { server_name disabled.test; access_log off; }')
+        result = self.manager.logs('conf.d/access-off.conf', 'access')
+        self.assertEqual(result['sources'], [])
+        self.assertIn('access_log off', result['content'])
+        self.assertNotIn('Просмотр недоступен', result['content'])
+
+    def test_error_log_off_is_reported_as_non_file_destination(self):
+        config = self.manager.root / 'conf.d' / 'error-off.conf'
+        config.write_text('server { server_name disabled.test; error_log off; }')
+        result = self.manager.logs('conf.d/error-off.conf', 'error')
+        self.assertEqual(result['sources'], [])
+        self.assertIn('error_log off', result['content'])
+        self.assertNotIn('Просмотр недоступен', result['content'])

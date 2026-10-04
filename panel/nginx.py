@@ -12,7 +12,8 @@ import portalocker
 from django.conf import settings
 
 from .transactions import (
-    OperationError, apply_transaction, atomic_write, has_proxy_server,
+    OperationError, apply_transaction, atomic_write, delete_config_transaction,
+    has_proxy_server, is_allowed_log_path,
     is_maintenance_config, maintenance_backup_path, render_maintenance_config,
 )
 
@@ -21,6 +22,13 @@ def walk(nodes):
     for node in nodes:
         yield node
         yield from walk(node.get('block', []))
+
+
+def configured_log_paths(nodes, kind):
+    directives = [node for node in walk(nodes) if node['directive'] == kind + '_log' and node['args']]
+    has_off = any(node['args'][0].lower() == 'off' for node in directives)
+    paths = [node['args'][0] for node in directives if node['args'][0].lower() != 'off']
+    return list(dict.fromkeys(paths)), has_off
 
 
 def revision(content):
@@ -47,13 +55,15 @@ def describe_configuration(nodes, identifier, content_revision, enabled, togglea
 
 
 class NginxManager:
-    def __init__(self, *, root=None, logs_root=None, state=None, demo=None, maintenance_root=None):
+    def __init__(self, *, root=None, logs_root=None, state=None, demo=None, maintenance_root=None, extra_log_roots=None):
         self.root = Path(root if root is not None else settings.NGINX_ROOT).resolve()
         self.logs_root = Path(logs_root if logs_root is not None else settings.NGINX_LOG_ROOT).resolve()
         self.demo = settings.SNC_MODE == 'demo' if demo is None else demo
         self.state = Path(state if state is not None else settings.STATE_DIR)
         self.maintenance_root = Path(maintenance_root if maintenance_root is not None else settings.SNC_MAINTENANCE_ROOT)
         self.maintenance_page = self.maintenance_root / 'maitenance.html'
+        configured_log_roots = settings.SNC_LOG_EXTRA_ROOTS if extra_log_roots is None else extra_log_roots
+        self.allowed_log_roots = tuple(dict.fromkeys([self.logs_root, *(Path(root).resolve() for root in configured_log_roots)]))
 
     def lock(self):
         return portalocker.Lock(str(self.state / 'nginx.lock'), timeout=15)
@@ -288,6 +298,33 @@ class NginxManager:
             self.backup(identifier, current)
             return apply_transaction(change, rollback, self.validate, self.reload)
 
+    def delete(self, identifier, expected_revision):
+        with self.lock():
+            path = self.path(identifier)
+            if not path.is_file():
+                raise OperationError('Файл конфигурации не найден.')
+            current = path.read_bytes()
+            if revision(current) != expected_revision:
+                raise OperationError('Конфигурация изменилась. Обновите список.')
+            standard_site = path.parent == self.root / 'sites-available'
+            standard_conf = path.parent == self.root / 'conf.d' and (path.name.endswith('.conf') or path.name.endswith('.conf.disabled'))
+            if not standard_site and not standard_conf:
+                raise OperationError('Удалять можно только стандартные конфигурации сайтов.')
+            item = next((item for item in self.inventory()['items'] if item['id'] == identifier), None)
+            if item is None or not item['toggleable']:
+                raise OperationError('Конфигурация не является управляемым виртуальным хостом.')
+            if item['enabled']:
+                raise OperationError('Сначала отключите хост. Активные конфигурации удалять нельзя.')
+            links = self.links(path) if standard_site else []
+            stored = self.maintenance_backup(identifier)
+            self.backup(identifier, current)
+            if stored.is_file():
+                self.backup(identifier, stored.read_bytes())
+            delete_config_transaction(path, links, self.validate, self.reload)
+            if stored.is_file():
+                stored.unlink()
+            return 'Хост удалён из nginx. Резервная копия конфигурации сохранена.'
+
     def render_site(self, data, log_root=None):
         name = data.get('name', '').strip().lower()
         if len(name) > 190 or not re.fullmatch(r'(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', name):
@@ -335,21 +372,28 @@ class NginxManager:
         if kind not in {'access', 'error'}:
             raise OperationError('Неизвестный журнал.')
         candidates = []
+        disabled = False
         if identifier:
             nodes = self.parse(self.path(identifier))
-            candidates = [node['args'][0] for node in walk(nodes) if node['directive'] == kind + '_log' and node['args']]
+            candidates, has_off = configured_log_paths(nodes, kind)
         else:
             candidates = [str(self.logs_root / (kind + '.log'))]
+            has_off = False
+        off_note = ''
+        if has_off:
+            off_note = 'Запись access-лога выключена директивой access_log off.' if kind == 'access' else 'Директива error_log off не задаёт файловый путь к журналу.'
         if not candidates:
+            if off_note:
+                return {'content': off_note, 'sources': [], 'note': off_note}
             return {'content': '', 'sources': [], 'note': 'В файле не задан отдельный журнал. Смотрите общий журнал nginx.'}
-        output, sources = [], []
+        output, sources = ([off_note] if off_note else []), []
         for candidate in dict.fromkeys(candidates):
             path = Path(candidate)
-            if not path.is_absolute() or not path.resolve().is_relative_to(self.logs_root) or '$' in candidate:
+            if not is_allowed_log_path(candidate, self.allowed_log_roots):
                 output.append(f'[{candidate}] Просмотр недоступен: путь вне разрешённого каталога или динамический журнал.')
                 continue
             sources.append(str(path))
-            if not path.exists():
+            if not path.is_file():
                 output.append(f'[{path.name}] Журнал ещё не создан.')
                 continue
             with path.open('rb') as stream:

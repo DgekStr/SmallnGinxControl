@@ -11,18 +11,20 @@ from pathlib import Path
 
 if __package__:
     from .transactions import (
-        OperationError, apply_transaction, atomic_write, has_proxy_server,
+        OperationError, apply_transaction, atomic_write, delete_config_transaction,
+        has_proxy_server, is_allowed_log_path,
         is_maintenance_config, maintenance_backup_path, render_maintenance_config,
     )
 
 
 class RemoteWorker:
-    def __init__(self, root, log_root, state='/var/lib/smallnginxcontrol-ssh', maintenance_root='/var/www/html'):
+    def __init__(self, root, log_root, state='/var/lib/smallnginxcontrol-ssh', maintenance_root='/var/www/html', log_roots=None):
         self.root = Path(root).resolve()
         self.log_root = Path(log_root).resolve()
         self.state = Path(state)
         self.maintenance_root = Path(maintenance_root)
         self.maintenance_page = self.maintenance_root / 'maitenance.html'
+        self.allowed_log_roots = tuple(dict.fromkeys([self.log_root, *(Path(root).resolve() for root in (log_roots or ['/var/http']))]))
 
     def path(self, identifier):
         if not isinstance(identifier, str) or not identifier or '\\' in identifier:
@@ -125,14 +127,17 @@ class RemoteWorker:
         old = path.read_bytes()
         if hashlib.sha256(old).hexdigest() != data.get('revision'):
             raise OperationError('Configuration changed; reload it before saving')
-        self.backup(data['id'], old)
         if action == 'save':
             content = data['content'].encode('utf-8')
             if len(content) > 256 * 1024:
                 raise OperationError('Configuration too large')
+            self.backup(data['id'], old)
             return apply_transaction(lambda: atomic_write(path, content), lambda: atomic_write(path, old), self.validate, self.reload)
+        if action == 'delete':
+            return self.delete(data['id'], path, old)
         if action != 'toggle' or type(data.get('enabled')) is not bool:
             raise OperationError('Invalid operation')
+        self.backup(data['id'], old)
         enabled = data['enabled']
         stored = self.maintenance_backup(data['id'])
         if is_maintenance_config(old):
@@ -200,11 +205,31 @@ class RemoteWorker:
             raise OperationError('Custom includes must be edited in nginx.conf')
         return apply_transaction(change, rollback, self.validate, self.reload)
 
+    def delete(self, identifier, path, content):
+        standard_site = path.parent == self.root / 'sites-available'
+        standard_conf = path.parent == self.root / 'conf.d' and (path.name.endswith('.conf') or path.name.endswith('.conf.disabled'))
+        if not standard_site and not standard_conf:
+            raise OperationError('Only standard virtual host configurations can be deleted')
+        config = next((item for item in self.inventory()['configs'] if item['id'] == identifier), None)
+        if config is None or not config['toggleable']:
+            raise OperationError('Configuration is not a manageable virtual host')
+        if config['enabled']:
+            raise OperationError('Disable the host before deleting it; active configurations cannot be deleted')
+        links = [link for link in (self.root / 'sites-enabled').glob('*') if link.is_symlink() and link.resolve() == path] if standard_site else []
+        stored = self.maintenance_backup(identifier)
+        self.backup(identifier, content)
+        if stored.is_file():
+            self.backup(identifier, stored.read_bytes())
+        delete_config_transaction(path, links, self.validate, self.reload)
+        if stored.is_file():
+            stored.unlink()
+        return 'Host deleted from nginx; a configuration backup was saved'
+
     def logs(self, candidates, lines):
         output, sources = [], []
         for candidate in dict.fromkeys(candidates):
             path = Path(candidate)
-            if not path.is_absolute() or not path.resolve().is_relative_to(self.log_root) or '$' in candidate:
+            if not is_allowed_log_path(candidate, self.allowed_log_roots):
                 output.append(f'[{candidate}] Log path outside allowed root or dynamic log')
                 continue
             sources.append(str(path))
@@ -246,6 +271,13 @@ class RemoteWorker:
             return self.read(data['id'])
         if operation == 'logs':
             return self.logs(data['paths'], data['lines'])
+        if operation == 'delete':
+            with self.lock():
+                path = self.path(data['id'])
+                content = path.read_bytes()
+                if hashlib.sha256(content).hexdigest() != data.get('revision'):
+                    raise OperationError('Configuration changed; reload it before deleting')
+                return self.delete(data['id'], path, content)
         if operation == 'status':
             return self.status()
         if operation == 'metrics':
@@ -266,7 +298,7 @@ class RemoteWorker:
 if __name__ == '__main__':
     try:
         payload = json.loads(sys.stdin.read(600000))
-        worker = RemoteWorker(payload['root'], payload['log_root'])
+        worker = RemoteWorker(payload['root'], payload['log_root'], log_roots=payload.get('log_roots'))
         result = worker.dispatch(payload['operation'], payload.get('data', {}))
         print(json.dumps({'ok': True, 'result': result}, ensure_ascii=True))
     except Exception as error:

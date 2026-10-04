@@ -67,6 +67,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 NGINX_ROOT = Path(os.environ.get('SNC_NGINX_ROOT', STATE_DIR / 'nginx' if SNC_MODE == 'demo' else '/etc/nginx'))
 NGINX_LOG_ROOT = Path(os.environ.get('SNC_LOG_ROOT', STATE_DIR / 'logs' if SNC_MODE == 'demo' else '/var/log/nginx'))
+SNC_LOG_EXTRA_ROOTS = tuple(Path(value.strip()).resolve() for value in os.environ.get('SNC_LOG_EXTRA_ROOTS', '/var/http').split(',') if value.strip())
 SNC_MAINTENANCE_ROOT = Path(os.environ.get('SNC_MAINTENANCE_ROOT', STATE_DIR / 'maintenance' if SNC_MODE == 'demo' else '/var/www/html'))
 NGINX_BIN = os.environ.get('SNC_NGINX_BIN', '/usr/sbin/nginx')
 SNC_SERVER = os.environ.get('SNC_SERVER', '192.0.2.15')

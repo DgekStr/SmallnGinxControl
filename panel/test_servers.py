@@ -73,6 +73,47 @@ class ServerTests(TestCase):
             with self.assertRaises(OperationError):
                 worker.dispatch('shell', {'command': 'id'})
 
+    def test_remote_worker_reads_logs_from_configured_extra_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            extra_root = root / 'http'
+            host_logs = extra_root / 'example.test'
+            host_logs.mkdir(parents=True)
+            log = host_logs / 'access.log'
+            log.write_text('GET / 200\n')
+            worker = RemoteWorker(root, root / 'logs', root / 'state', log_roots=[extra_root])
+            result = worker.logs([str(log)], 10)
+            self.assertIn('GET / 200', result['content'])
+            denied = worker.logs(['/etc/passwd'], 10)
+            self.assertIn('outside allowed root', denied['content'])
+
+    def test_remote_worker_deletes_only_disabled_hosts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            path = root / 'conf.d' / 'unused.conf.disabled'
+            path.write_text('server { listen 80; server_name unused.test; }\n')
+            worker = RemoteWorker(root, root / 'logs', root / 'state')
+            config = {'id': 'conf.d/unused.conf.disabled', 'toggleable': True, 'enabled': False}
+            with patch.object(worker, 'inventory', return_value={'configs': [config], 'warnings': []}), patch.object(worker, 'validate', return_value='ok'), patch.object(worker, 'reload'):
+                result = worker.edit('delete', {'id': config['id'], 'revision': worker.read(config['id'])['revision']})
+            self.assertIn('deleted from nginx', result)
+            self.assertFalse(path.exists())
+            self.assertTrue(list((root / 'state' / 'backups').glob('*.bak')))
+
+    def test_remote_worker_refuses_delete_of_enabled_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            path = root / 'conf.d' / 'active.conf'
+            path.write_text('server { listen 80; server_name active.test; }\n')
+            worker = RemoteWorker(root, root / 'logs', root / 'state')
+            config = {'id': 'conf.d/active.conf', 'toggleable': True, 'enabled': True}
+            with patch.object(worker, 'inventory', return_value={'configs': [config], 'warnings': []}):
+                with self.assertRaisesRegex(OperationError, 'Disable the host'):
+                    worker.edit('delete', {'id': config['id'], 'revision': worker.read(config['id'])['revision']})
+            self.assertTrue(path.is_file())
+
     def test_remote_worker_reverts_failed_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

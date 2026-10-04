@@ -47,6 +47,7 @@ ssh -N -L 7444:127.0.0.1:7444 root@SERVER
 В env-файле установить:
 
 ```sh
+SNC_LOG_EXTRA_ROOTS=/var/http
 SNC_CSRF_ORIGINS=https://PANEL-HOST:7445
 SNC_TRUST_PROXY=1
 SNC_SECURE_COOKIES=1
@@ -76,6 +77,10 @@ systemctl is-active smallnginxcontrol
 ## Reverse-proxy maintenance
 
 Стандартный выключаемый reverse proxy не удаляется из графа nginx: панель сохраняет оригинал в `$SNC_STATE_DIR/maintenance/`, включает `503` и показывает `/var/www/html/maitenance.html`. При включении оригинальный конфиг восстанавливается. Убедитесь, что файл страницы существует и читается пользователем nginx. Для proxy, уже подключающего `maintenance_all.conf`, используется имеющийся handler. Нестандартные include не переключаются автоматически.
+
+Журналы читаются по директивам `access_log`/`error_log` из `$SNC_LOG_ROOT` и дополнительных абсолютных корней из `SNC_LOG_EXTRA_ROOTS` (по умолчанию `/var/http`). Для SSH-серверов этот список передаётся remote worker; SSH-пользователь должен иметь право читать указанные файлы. Динамические пути и пути вне разрешённых roots остаются заблокированы.
+
+Удаление vhost доступно только после его отключения и явного подтверждения. Удаляются стандартный конфиг из `conf.d` или `sites-available` и относящиеся к нему `sites-enabled` links; активные vhost API отклоняет. Перед удалением создаётся резервная копия, затем выполняются `nginx -t` и reload с rollback при ошибке. Backup удалённого/исходного конфига сохраняется в `$SNC_STATE_DIR/backups`; удалённые backup автоматически не очищаются. Нестандартные include удалить из UI нельзя.
 
 Не редактируйте один nginx-файл параллельно через панель, shell, Certbot и другие средства. Перед production-операциями изучите конфиг, его include и журналы; сначала используйте `nginx -t`.
 

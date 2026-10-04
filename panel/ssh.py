@@ -10,7 +10,7 @@ import paramiko
 from cryptography.fernet import InvalidToken
 from django.conf import settings
 
-from .nginx import NginxManager, describe_configuration, walk
+from .nginx import NginxManager, configured_log_paths, describe_configuration
 from .transactions import OperationError
 
 
@@ -72,7 +72,7 @@ class SSHManager:
                 timeout=6, banner_timeout=6, auth_timeout=8,
             )
             stdin, stdout, stderr = client.exec_command(worker_command(), timeout=90)
-            stdin.write(json.dumps({'root': self.server.nginx_root, 'log_root': self.server.log_root, 'operation': operation, 'data': data or {}}, ensure_ascii=True))
+            stdin.write(json.dumps({'root': self.server.nginx_root, 'log_root': self.server.log_root, 'log_roots': [str(path) for path in settings.SNC_LOG_EXTRA_ROOTS], 'operation': operation, 'data': data or {}}, ensure_ascii=True))
             stdin.flush()
             stdin.channel.shutdown_write()
             output = stdout.read(6 * 1024 * 1024 + 1)
@@ -130,6 +130,9 @@ class SSHManager:
     def toggle(self, identifier, enabled, expected_revision):
         return self.rpc('toggle', {'id': identifier, 'enabled': enabled, 'revision': expected_revision})
 
+    def delete(self, identifier, expected_revision):
+        return self.rpc('delete', {'id': identifier, 'revision': expected_revision})
+
     def service(self, action):
         if action not in {'test', 'reload', 'restart'}:
             raise OperationError('Неизвестное действие.')
@@ -141,7 +144,10 @@ class SSHManager:
         if identifier:
             config = self.read(identifier)
             nodes = self.parser.syntax(config['content'])
-            paths = [node['args'][0] for node in walk(nodes) if node['directive'] == kind + '_log' and node['args']]
+            paths, has_off = configured_log_paths(nodes, kind)
+            if not paths and has_off:
+                note = 'Запись access-лога выключена директивой access_log off.' if kind == 'access' else 'Директива error_log off не задаёт файловый путь к журналу.'
+                return {'content': note, 'sources': [], 'note': note}
         else:
             paths = [self.server.log_root.rstrip('/') + '/' + kind + '.log']
         return self.rpc('logs', {'paths': paths, 'lines': max(1, min(500, lines))})

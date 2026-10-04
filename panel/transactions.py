@@ -34,6 +34,19 @@ def maintenance_backup_path(state, identifier):
     return Path(state) / 'maintenance' / f'{digest}.original'
 
 
+def is_allowed_log_path(candidate, roots):
+    if not isinstance(candidate, str) or not candidate or '$' in candidate or any(ord(char) < 32 for char in candidate):
+        return False
+    path = Path(candidate)
+    if not path.is_absolute():
+        return False
+    try:
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(Path(root).resolve()) for root in roots)
+    except (OSError, RuntimeError):
+        return False
+
+
 def is_maintenance_config(content):
     marker = MAINTENANCE_MARKER.encode('ascii') if isinstance(content, bytes) else MAINTENANCE_MARKER
     return marker in content
@@ -157,3 +170,29 @@ def apply_transaction(change, rollback, validate, reload_service):
             raise OperationError(f'Apply failed: {error}. Recovery failed: {recovery}') from error
         raise OperationError(f'Apply failed; previous configuration restored: {error}') from error
     return validation
+
+
+def delete_config_transaction(path, links, validate, reload_service):
+    path = Path(path)
+    content = path.read_bytes()
+    mode = path.stat().st_mode & 0o777
+    link_targets = {}
+    for link in links:
+        if not link.is_symlink() or link.resolve() != path.resolve():
+            raise OperationError('Ссылка sites-enabled изменилась. Обновите список и повторите.')
+        link_targets[link] = os.readlink(link)
+
+    def change():
+        for link in link_targets:
+            link.unlink()
+        path.unlink()
+
+    def rollback():
+        if not path.exists():
+            atomic_write(path, content)
+            os.chmod(path, mode)
+        for link, target in link_targets.items():
+            if not os.path.lexists(link):
+                link.symlink_to(target)
+
+    return apply_transaction(change, rollback, validate, reload_service)
