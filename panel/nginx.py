@@ -43,12 +43,12 @@ def describe_configuration(nodes, identifier, content_revision, enabled, togglea
     servers = sum(node['directive'] == 'server' and 'block' in node for node in directives)
     if not servers:
         return None
-    domains = [value for node in directives if node['directive'] == 'server_name' for value in node['args']]
+    domains = list(dict.fromkeys(value for node in directives if node['directive'] == 'server_name' for value in node['args']))
     upstreams = [node['args'][0] for node in directives if node['directive'] in {'proxy_pass', 'fastcgi_pass', 'grpc_pass', 'uwsgi_pass', 'scgi_pass'} and node['args']]
     roots = [node['args'][0] for node in directives if node['directive'] == 'root' and node['args']]
     listens = [' '.join(node['args']) for node in directives if node['directive'] == 'listen']
     return {
-        'id': identifier, 'name': domains[0] if domains else Path(identifier).stem,
+        'id': identifier, 'name': next((domain for domain in domains if domain != '_'), domains[0] if domains else Path(identifier).stem),
         'domains': domains, 'kind': 'proxy' if upstreams else 'host',
         'target': ', '.join(dict.fromkeys(upstreams or roots)) or 'Конфигурация сервера',
         'listen': ', '.join(dict.fromkeys(listens)) or '80',
@@ -341,6 +341,20 @@ class NginxManager:
             self.backup(identifier, current)
             return apply_transaction(change, rollback, self.validate, self.reload)
 
+    def _is_management_config(self, nodes):
+        local_hosts = {'127.0.0.1', 'localhost', settings.SNC_SERVER}
+        for node in walk(nodes):
+            if node['directive'] not in {'proxy_pass', 'fastcgi_pass', 'uwsgi_pass', 'scgi_pass', 'grpc_pass'} or not node['args']:
+                continue
+            upstream = urlsplit(node['args'][0])
+            try:
+                port = upstream.port
+            except ValueError:
+                port = None
+            if upstream.hostname in local_hosts and port in {settings.SNC_PORT, settings.SNC_PORT + 1}:
+                return True
+        return False
+
     def delete(self, identifier, expected_revision):
         with self.lock():
             path = self.path(identifier)
@@ -356,8 +370,8 @@ class NginxManager:
             item = next((item for item in self.inventory()['items'] if item['id'] == identifier), None)
             if item is None or not item['toggleable']:
                 raise OperationError('Конфигурация не является управляемым виртуальным хостом.')
-            if item['enabled']:
-                raise OperationError('Сначала отключите хост. Активные конфигурации удалять нельзя.')
+            if self._is_management_config(self.parse(path)):
+                raise OperationError('Нельзя удалить конфигурацию, через которую открыта эта панель.')
             links = self.links(path) if standard_site else []
             stored = self.maintenance_backup(identifier)
             self.backup(identifier, current)
@@ -498,7 +512,7 @@ class NginxManager:
                 raise OperationError('Конфигурация с таким именем уже существует.')
             for item in self.inventory()['items']:
                 if name in item['domains']:
-                    raise OperationError('Такой домен уже есть в конфигурации.')
+                    raise OperationError(f'Домен уже присутствует в конфигурации {item["id"]}. Найдите её по домену и проверьте server-блоки перед повторным созданием.')
             content_bytes = content.encode()
             main_path = self.path('nginx.conf') if not self.demo else None
             main_original = main_path.read_bytes() if main_path is not None else None

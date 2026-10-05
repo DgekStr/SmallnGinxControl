@@ -174,7 +174,7 @@ class ServerTests(TestCase):
             self.assertFalse(path.exists())
             self.assertTrue(list((root / 'state' / 'backups').glob('*.bak')))
 
-    def test_remote_worker_refuses_delete_of_enabled_host(self):
+    def test_remote_worker_deletes_enabled_host(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'conf.d').mkdir()
@@ -182,8 +182,22 @@ class ServerTests(TestCase):
             path.write_text('server { listen 80; server_name active.test; }\n')
             worker = RemoteWorker(root, root / 'logs', root / 'state')
             config = {'id': 'conf.d/active.conf', 'toggleable': True, 'enabled': True}
+            with patch.object(worker, 'inventory', return_value={'configs': [config], 'warnings': []}), patch.object(worker, 'validate', return_value='ok'), patch.object(worker, 'reload'):
+                result = worker.edit('delete', {'id': config['id'], 'revision': worker.read(config['id'])['revision']})
+            self.assertIn('deleted from nginx', result)
+            self.assertFalse(path.exists())
+            self.assertTrue(list((root / 'state' / 'backups').glob('*.bak')))
+
+    def test_remote_worker_protects_management_host_from_delete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            path = root / 'conf.d' / 'panel.conf'
+            path.write_text('server { listen 443 ssl; server_name panel.test; location / { proxy_pass http://127.0.0.1:7444; } }\n')
+            worker = RemoteWorker(root, root / 'logs', root / 'state')
+            config = {'id': 'conf.d/panel.conf', 'toggleable': True, 'enabled': True}
             with patch.object(worker, 'inventory', return_value={'configs': [config], 'warnings': []}):
-                with self.assertRaisesRegex(OperationError, 'Disable the host'):
+                with self.assertRaisesRegex(OperationError, 'Cannot delete the configuration serving'):
                     worker.edit('delete', {'id': config['id'], 'revision': worker.read(config['id'])['revision']})
             self.assertTrue(path.is_file())
 

@@ -63,7 +63,7 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   await expect(page.locator('#host-dialog')).not.toBeVisible();
   const row = page.locator('#hosts-table tbody tr').filter({hasText: 'e2e.internal'});
   await expect(row).toContainText('Включён');
-  await expect(row.getByRole('button', {name: 'Удалить e2e.internal'})).toHaveCount(0);
+  await expect(row.getByRole('button', {name: 'Удалить e2e.internal'})).toBeVisible();
   await row.getByRole('switch').click();
   await expect(page.locator('#confirm-description')).toContainText('maitenance.html');
   await page.locator('#confirm-accept').click();
@@ -93,11 +93,9 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   await page.locator('#export-logs-xml').click();
   expect((await xmlDownload).suggestedFilename()).toBe('nginx-access.xml');
   await page.locator('[data-view="proxies"]').click();
-  await row.getByRole('switch').click();
-  await page.locator('#confirm-accept').click();
-  await expect(row).toContainText('Обслуживание');
   await expect(row.getByRole('button', {name: 'Удалить e2e.internal'})).toBeVisible();
   await row.getByRole('button', {name: 'Удалить e2e.internal'}).click();
+  await expect(page.locator('#confirm-description')).toContainText('Хост активен');
   await expect(page.locator('#confirm-description')).toContainText('Резервная копия');
   await page.locator('#confirm-accept').click();
   await expect(row).toHaveCount(0);

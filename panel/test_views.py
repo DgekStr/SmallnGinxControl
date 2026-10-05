@@ -50,6 +50,8 @@ class AuthenticationTests(TestCase):
         response = self.client.post('/login/', {'code': pyotp.TOTP(secret).now()})
         self.assertEqual(response.status_code, 302)
         self.assertEqual(int(self.client.session['_auth_user_id']), self.user.pk)
+        self.assertGreater(self.client.session.get_expiry_age(), 300)
+        self.assertLessEqual(self.client.session.get_expiry_age(), 24 * 60 * 60)
 
     def test_two_factor_enrollment_encrypts_secret_and_requires_code(self):
         self.client.force_login(self.user)

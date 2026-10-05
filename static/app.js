@@ -129,7 +129,7 @@ function hostTable(items) {
     const status = item.maintenance ? 'Обслуживание' : item.enabled ? 'Включён' : 'Отключён';
     const toggleLabel = item.maintenance ? 'Вернуть прокси' : item.enabled ? 'Отключить' : 'Включить';
     const toggleTitle = !item.toggleable ? 'Нестандартный include: изменение в nginx.conf' : item.maintenance ? 'Вернуть reverse-proxy' : item.enabled ? 'Перевести конфигурацию в обслуживание' : 'Включить конфигурацию';
-    const deleteButton = !item.enabled && item.toggleable ? `<button class="icon-button danger" data-action="delete" aria-label="Удалить ${escapeHtml(item.name)}" title="Удалить отключённую конфигурацию">${icon('trash-2')}</button>` : '';
+    const deleteButton = item.toggleable ? `<button class="icon-button danger" data-action="delete" aria-label="Удалить ${escapeHtml(item.name)}" title="Удалить конфигурацию из nginx">${icon('trash-2')}</button>` : '';
     const expiryDays = item.tls && Number.isInteger(item.certificate_days) ? item.certificate_days : null;
     const expiry = expiryDays === null ? '' : `<span class="certificate-expiry ${expiryDays < 0 ? 'expired' : expiryDays <= 14 ? 'warning' : ''}" title="${expiryDays < 0 ? 'Сертификат просрочен' : 'Осталось дней действия сертификата'}">${expiryDays < 0 ? `Просрочен ${Math.abs(expiryDays)} дн.` : expiryDays === 0 ? 'Истекает сегодня' : `${expiryDays} дн.`}</span>`;
     const traffic = item.traffic;
@@ -634,10 +634,10 @@ document.addEventListener('click', async (event) => {
     const enteringMaintenance = toggle && item.enabled && item.kind === 'proxy';
     const leavingMaintenance = toggle && item.maintenance;
     const title = deleting ? `Удалить ${item.name} из nginx?` : toggle ? `${leavingMaintenance ? 'Вернуть прокси' : item.enabled ? 'Отключить' : 'Включить'} ${item.name}?` : `Применить ${item.name}?`;
-    const description = deleting ? `Файл ${item.id}${item.servers > 1 ? ` со всеми ${item.servers} блоками server` : ''} и его ссылки sites-enabled будут удалены из nginx, хост исчезнет из панели. Резервная копия останется в state-каталоге. После проверки конфигурации будет выполнен reload.` : `Сервер: ${serverLabel()}. Файл: ${item.id}. ${item.servers > 1 ? `Затронуты все ${item.servers} блоков server в файле. ` : ''}После проверки конфигурации будет выполнен reload всего nginx.${enteringMaintenance ? ' Reverse-proxy будет переведён в обслуживание с показом maitenance.html.' : toggle && item.enabled ? ' Хост перестанет обслуживаться.' : ''}`;
+    const description = deleting ? `Файл ${item.id}${item.servers > 1 ? ` со всеми ${item.servers} блоками server` : ''} и его ссылки sites-enabled будут удалены из nginx, хост исчезнет из панели.${item.enabled ? ' Хост активен: сайты перестанут обслуживаться после reload.' : ''} Резервная копия останется в state-каталоге. После проверки конфигурации будет выполнен reload.` : `Сервер: ${serverLabel()}. Файл: ${item.id}. ${item.servers > 1 ? `Затронуты все ${item.servers} блоков server в файле. ` : ''}После проверки конфигурации будет выполнен reload всего nginx.${enteringMaintenance ? ' Reverse-proxy будет переведён в обслуживание с показом maitenance.html.' : toggle && item.enabled ? ' Хост перестанет обслуживаться.' : ''}`;
     if (!await confirmAction(title, description, deleting || toggle && item.enabled && !enteringMaintenance)) return;
     await request('hosts', {action: deleting ? 'delete' : toggle ? 'toggle' : 'reload', id: item.id, enabled: !item.enabled, revision: item.revision});
-    toast(deleting ? 'Отключённый хост удалён из панели и nginx.' : toggle ? enteringMaintenance ? 'Reverse-proxy переведён в обслуживание.' : leavingMaintenance ? 'Reverse-proxy восстановлен.' : 'Состояние конфигурации изменено.' : 'Конфигурация применена через reload.');
+    toast(deleting ? 'Хост удалён из панели и nginx.' : toggle ? enteringMaintenance ? 'Reverse-proxy переведён в обслуживание.' : leavingMaintenance ? 'Reverse-proxy восстановлен.' : 'Состояние конфигурации изменено.' : 'Конфигурация применена через reload.');
     await refreshHosts();
   });
 });

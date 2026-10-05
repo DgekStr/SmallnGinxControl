@@ -15,6 +15,25 @@ from django.utils import timezone
 from .models import MetricSample, Server
 
 
+def collect_completed(pending, previous, due, now):
+    import logging
+
+    logger = logging.getLogger(__name__)
+    for identifier, future in list(pending.items()):
+        if not future.done():
+            continue
+        try:
+            previous[identifier], healthy = future.result()
+        except Exception:
+            logger.exception('Server metric collection failed for %s', identifier)
+            previous.pop(identifier, None)
+            due[identifier] = now + 30
+        else:
+            due[identifier] = now + (0 if healthy else 30)
+        finally:
+            pending.pop(identifier, None)
+
+
 def sample_from_raw(raw, previous, now):
     cpu = rx_rate = tx_rate = 0
     if previous and raw['uptime'] >= previous[0]['uptime']:
@@ -75,11 +94,7 @@ def collect(stop):
         while not stop.is_set():
             close_old_connections()
             try:
-                for identifier, future in list(pending.items()):
-                    if future.done():
-                        previous[identifier], healthy = future.result()
-                        due[identifier] = time.monotonic() + (0 if healthy else 30)
-                        del pending[identifier]
+                collect_completed(pending, previous, due, time.monotonic())
                 servers = list(Server.objects.all())
                 active = {server.pk for server in servers}
                 for mapping in [previous, due, revisions]:

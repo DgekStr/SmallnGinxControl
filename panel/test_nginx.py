@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
-from .nginx import NginxManager
+from .nginx import NginxManager, describe_configuration
 from .transactions import OperationError, render_maintenance_config
 
 
@@ -44,6 +44,29 @@ class NginxTests(SimpleTestCase):
         self.assertFalse(item['maintenance'])
         self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
         self.assertFalse(self.manager.maintenance_backup(item['id']).exists())
+
+    def test_inventory_names_real_domain_before_default_catchall(self):
+        item = describe_configuration(
+            [
+                {'directive': 'server', 'args': [], 'block': [
+                    {'directive': 'server_name', 'args': ['_']},
+                ]},
+                {'directive': 'server', 'args': [], 'block': [
+                    {'directive': 'server_name', 'args': ['mail.focuslens.dev']},
+                ]},
+            ],
+            'sites-available/default_catchall', 'revision', True, True,
+        )
+        self.assertEqual(item['name'], 'mail.focuslens.dev')
+        self.assertEqual(item['domains'], ['_', 'mail.focuslens.dev'])
+
+    def test_duplicate_domain_error_identifies_hidden_catchall_config(self):
+        config = self.manager.root / 'sites-available' / 'default_catchall'
+        config.write_text('server { listen 80 default_server; server_name _; }\nserver { listen 80; server_name mail.focuslens.dev; }\n')
+        (self.manager.root / 'sites-enabled' / 'default_catchall').symlink_to(config)
+
+        with self.assertRaisesRegex(OperationError, 'sites-available/default_catchall'):
+            self.manager.create({'name': 'mail.focuslens.dev', 'kind': 'proxy', 'target': 'https://192.168.0.4:8843', 'port': 80})
 
     def test_ssl_site_renders_http_challenge_redirect_and_tls_server(self):
         data = {'name': 'secure.example.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80, 'ssl_email': 'ops@example.test'}
@@ -89,18 +112,36 @@ class NginxTests(SimpleTestCase):
         self.assertFalse(item['maintenance'])
         self.assertTrue((self.manager.root / 'conf.d' / 'static.test.conf.disabled').is_file())
 
-    def test_delete_requires_disabled_host_and_removes_disabled_config(self):
+    def test_delete_removes_active_host_config_and_keeps_backup(self):
         self.manager.create({'name': 'delete.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80})
-        item = self.manager.inventory()['items'][0]
-        with self.assertRaisesRegex(OperationError, 'Сначала отключите'):
-            self.manager.delete(item['id'], item['revision'])
-        self.assertTrue((self.manager.root / item['id']).is_file())
-        self.manager.toggle(item['id'], False, item['revision'])
         item = self.manager.inventory()['items'][0]
         result = self.manager.delete(item['id'], item['revision'])
         self.assertIn('удалён из nginx', result)
         self.assertEqual(self.manager.inventory()['items'], [])
         self.assertTrue(list((self.manager.state / 'backups').glob('*.bak')))
+
+    def test_delete_active_sites_available_host_removes_enabled_link(self):
+        config = self.manager.root / 'sites-available' / 'active.test'
+        config.write_text('server { listen 80; server_name active.test; }\n')
+        link = self.manager.root / 'sites-enabled' / 'active.test'
+        link.symlink_to(config)
+        item = self.manager.inventory()['items'][0]
+
+        self.manager.delete(item['id'], item['revision'])
+
+        self.assertFalse(config.exists())
+        self.assertFalse(link.exists())
+        self.assertEqual(self.manager.inventory()['items'], [])
+
+    def test_delete_protects_control_panel_upstream(self):
+        config = self.manager.root / 'conf.d' / 'panel-proxy.conf'
+        config.write_text('server { listen 443 ssl; server_name panel.test; location / { proxy_pass http://127.0.0.1:7444; } }\n')
+        item = self.manager.inventory()['items'][0]
+
+        with self.assertRaisesRegex(OperationError, 'Нельзя удалить конфигурацию'):
+            self.manager.delete(item['id'], item['revision'])
+
+        self.assertTrue(config.is_file())
 
     def test_delete_maintenance_proxy_clears_saved_original(self):
         self.manager.create({'name': 'maintenance-delete.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80})

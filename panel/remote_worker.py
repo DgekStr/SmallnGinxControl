@@ -289,6 +289,17 @@ class RemoteWorker:
             raise OperationError('Custom includes must be edited in nginx.conf')
         return apply_transaction(change, rollback, self.validate, self.reload)
 
+    def _is_management_config(self, content):
+        for match in re.finditer(r'(?<![\w-])(?:proxy_pass|fastcgi_pass|uwsgi_pass|scgi_pass|grpc_pass)\s+([^;]+);', content):
+            upstream = urlsplit(match.group(1).strip().strip('"\''))
+            try:
+                port = upstream.port
+            except ValueError:
+                port = None
+            if upstream.hostname in {'127.0.0.1', 'localhost', self.management_host} and port in {self.management_port, self.management_https_port}:
+                return True
+        return False
+
     def delete(self, identifier, path, content):
         standard_site = path.parent == self.root / 'sites-available'
         standard_conf = path.parent == self.root / 'conf.d' and (path.name.endswith('.conf') or path.name.endswith('.conf.disabled'))
@@ -297,8 +308,8 @@ class RemoteWorker:
         config = next((item for item in self.inventory()['configs'] if item['id'] == identifier), None)
         if config is None or not config['toggleable']:
             raise OperationError('Configuration is not a manageable virtual host')
-        if config['enabled']:
-            raise OperationError('Disable the host before deleting it; active configurations cannot be deleted')
+        if self._is_management_config(content.decode('utf-8')):
+            raise OperationError('Cannot delete the configuration serving this control panel')
         links = [link for link in (self.root / 'sites-enabled').glob('*') if link.is_symlink() and link.resolve() == path] if standard_site else []
         stored = self.maintenance_backup(identifier)
         self.backup(identifier, content)
