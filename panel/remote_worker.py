@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 if __package__:
     from .transactions import (
-        OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
+        ACCESS_LOG_SAMPLE_DEFAULT_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
         certificate_days_remaining, issue_webroot_certificate, validate_certificate_request,
         delete_config_transaction, ensure_traffic_log_format, has_proxy_server, is_allowed_log_path,
         is_maintenance_config, maintenance_backup_path, render_maintenance_config,
@@ -320,7 +320,7 @@ class RemoteWorker:
             stored.unlink()
         return 'Host deleted from nginx; a configuration backup was saved'
 
-    def traffic_top(self, limit=5):
+    def traffic_top(self, limit=5, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):
         totals = []
         hosts = {}
         for config in self.inventory()['configs']:
@@ -328,7 +328,7 @@ class RemoteWorker:
             raw_paths = re.findall(r'(?m)^\s*access_log\s+(?:"([^"]+)"|\'([^\']+)\'|([^;\s]+))', content)
             paths = list(dict.fromkeys(next(value for value in match if value) for match in raw_paths))
             paths = [path for path in paths if path.lower() != 'off']
-            traffic = access_log_traffic_totals(paths, self.allowed_log_roots)
+            traffic = access_log_traffic_totals(paths, self.allowed_log_roots, sample_size)
             hosts[config['id']] = traffic
             total = traffic['downloaded_bytes']
             if not config['enabled'] or config.get('maintenance'):
@@ -340,7 +340,7 @@ class RemoteWorker:
             kind = 'proxy' if re.search(r'\bproxy_pass\b', content) else 'host'
             totals.append({'name': name, 'kind': kind, 'bytes': total})
         totals.sort(key=lambda entry: (-entry['bytes'], entry['name'].casefold()))
-        return {'items': totals[:max(1, min(5, limit))], 'hosts': hosts, 'sample_bytes_per_log': 128 * 1024}
+        return {'items': totals[:max(1, min(5, limit))], 'hosts': hosts, 'sample_bytes_per_log': sample_size}
 
     def logs(self, candidates, lines):
         output, sources = [], []
@@ -390,7 +390,7 @@ class RemoteWorker:
         if operation == 'logs':
             return self.logs(data['paths'], data['lines'])
         if operation == 'traffic':
-            return self.traffic_top()
+            return self.traffic_top(sample_size=data.get('sample_size', ACCESS_LOG_SAMPLE_DEFAULT_BYTES))
         if operation == 'delete':
             with self.lock():
                 path = self.path(data['id'])

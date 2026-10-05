@@ -157,10 +157,11 @@ class ServerTests(TestCase):
                 configs.append({'id': f'conf.d/{name}.conf', 'content': content, 'enabled': True, 'maintenance': False})
             worker = RemoteWorker(root, root / 'logs', root / 'state', log_roots=[extra_root])
             with patch.object(worker, 'inventory', return_value={'configs': configs, 'warnings': []}):
-                result = worker.traffic_top()
+                result = worker.dispatch('traffic', {'sample_size': 4096})
             self.assertEqual([item['name'] for item in result['items']], ['alpha.test', 'beta.test'])
             self.assertEqual([item['bytes'] for item in result['items']], [900, 300])
             self.assertEqual(result['hosts']['conf.d/alpha.test.conf'], {'downloaded_bytes': 900, 'uploaded_bytes': 950, 'uploaded_complete': True})
+            self.assertEqual(result['sample_bytes_per_log'], 4096)
 
     def test_remote_worker_deletes_only_disabled_hosts(self):
         with tempfile.TemporaryDirectory() as directory:

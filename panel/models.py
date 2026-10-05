@@ -6,6 +6,8 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+from .transactions import ACCESS_LOG_SAMPLE_DEFAULT_BYTES, ACCESS_LOG_SAMPLE_MAX_BYTES
+
 
 def server_id():
     return uuid.uuid4().hex
@@ -112,6 +114,7 @@ class ServiceSetting(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     log_retention_days = models.PositiveSmallIntegerField(default=30, validators=[MinValueValidator(1), MaxValueValidator(3650)])
     session_timeout_hours = models.PositiveSmallIntegerField(default=24, validators=[MinValueValidator(1), MaxValueValidator(720)])
+    access_log_sample_bytes = models.PositiveIntegerField(default=ACCESS_LOG_SAMPLE_DEFAULT_BYTES, validators=[MinValueValidator(1), MaxValueValidator(ACCESS_LOG_SAMPLE_MAX_BYTES)])
     updated_at = models.DateTimeField(auto_now=True)
 
     @classmethod

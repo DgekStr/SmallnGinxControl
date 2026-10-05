@@ -340,6 +340,26 @@ test('administrator can start TOTP enrollment from settings modal', async ({page
   await expect(page.locator('#two-factor-status')).toHaveText('Не подключена');
 });
 
+test('access-log TOP-5 sample size is configurable up to 100 MB', async ({page}) => {
+  await login(page);
+  await page.locator('[data-view="settings"]').click();
+  const sampleSize = page.locator('#access-log-sample-mib');
+  try {
+    await expect(sampleSize).toHaveAttribute('max', '100');
+    expect(Number(await sampleSize.inputValue())).toBeCloseTo(0.131072, 6);
+    await sampleSize.fill('1.5');
+    await page.locator('#access-log-sample-form button[type="submit"]').click();
+    await expect(page.locator('#access-log-sample-result')).toContainText('Настройки сохранены');
+    await page.locator('[data-view="overview"]').click();
+    await page.locator('[data-view="settings"]').click();
+    expect(Number(await sampleSize.inputValue())).toBeCloseTo(1.5, 6);
+  } finally {
+    await sampleSize.fill('0.131072');
+    await page.locator('#access-log-sample-form button[type="submit"]').click();
+    await expect(page.locator('#access-log-sample-result')).toContainText('Настройки сохранены');
+  }
+});
+
 test('switching server clears previous SSD usage while new metrics load', async ({page}) => {
   await login(page);
   await expect(page.locator('#current-disk')).toBeAttached();
@@ -354,8 +374,8 @@ test('switching server clears previous SSD usage while new metrics load', async 
 test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
-  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(4);
-  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов']);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(5);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'TOP-5 по трафику']);
   await expect(page.locator('#traffic-maintenance-status')).toHaveText('Работает');
   await expect(page.locator('#traffic-maintenance-path')).toHaveText('/var/www/html/maitenance.html');
   await expect(page.locator('#traffic-maintenance-toggle')).toBeDisabled();
@@ -364,6 +384,7 @@ test('password change persists across logout and login', async ({page}) => {
   await expect(page.locator('#traffic-maintenance-status')).toHaveText('Работает');
   await expect(page.locator('#traffic-maintenance-toggle')).toBeDisabled();
   await expect(page.locator('#session-timeout-hours')).toHaveValue('24');
+  expect(Number(await page.locator('#access-log-sample-mib').inputValue())).toBeCloseTo(0.131072, 6);
   await page.locator('#session-timeout-hours').fill('36');
   await page.locator('#session-timeout-form button[type="submit"]').click();
   await expect(page.locator('#session-timeout-result')).toContainText('Срок admin-сессии сохранён');

@@ -13,7 +13,7 @@ from cryptography.fernet import InvalidToken
 from django.conf import settings
 
 from .nginx import NginxManager, configured_log_paths, describe_configuration
-from .transactions import OperationError
+from .transactions import ACCESS_LOG_SAMPLE_DEFAULT_BYTES, OperationError
 
 
 def key_fingerprint(key):
@@ -160,8 +160,8 @@ class SSHManager:
     def delete(self, identifier, expected_revision):
         return self.rpc('delete', {'id': identifier, 'revision': expected_revision})
 
-    def traffic_top(self):
-        return self.rpc('traffic')
+    def traffic_top(self, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):
+        return self.rpc('traffic', {'sample_size': sample_size})
 
     def service(self, action):
         if action not in {'test', 'reload', 'restart'}:

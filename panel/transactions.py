@@ -19,11 +19,19 @@ class OperationError(Exception):
     pass
 
 
+def validate_access_log_sample_size(sample_size):
+    if type(sample_size) is not int or not 1 <= sample_size <= ACCESS_LOG_SAMPLE_MAX_BYTES:
+        raise OperationError('Размер выборки access log должен быть целым числом от 1 байта до 100 МБ.')
+    return sample_size
+
+
 MAINTENANCE_MARKER = '# smallnginxcontrol-maintenance'
 MAINTENANCE_URI = '/__smallnginxcontrol_maintenance.html'
 ACCESS_LOG_BYTES_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:\s|$)')
 ACCESS_LOG_TRAFFIC_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:[ \t]+(\d+|-))?(?=[ \t"]|$)')
 TRAFFIC_LOG_FORMAT_NAME = 'smallnginxcontrol_traffic'
+ACCESS_LOG_SAMPLE_DEFAULT_BYTES = 128 * 1024
+ACCESS_LOG_SAMPLE_MAX_BYTES = 100_000_000
 GLOBAL_TRAFFIC_BLOCK_MARKER = '# smallnginxcontrol-global-traffic-block'
 TRAFFIC_LOG_FORMAT_DIRECTIVE = (
     '    log_format smallnginxcontrol_traffic \'$remote_addr - $remote_user [$time_local] '
@@ -110,7 +118,8 @@ def is_allowed_log_path(candidate, roots):
         return False
 
 
-def access_log_traffic_bytes(candidate, roots, sample_size=128 * 1024):
+def access_log_traffic_bytes(candidate, roots, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):
+    sample_size = validate_access_log_sample_size(sample_size)
     if not is_allowed_log_path(candidate, roots):
         return 0
     path = Path(candidate)
@@ -125,7 +134,8 @@ def access_log_traffic_bytes(candidate, roots, sample_size=128 * 1024):
     return sum(int(match.group(1)) for match in ACCESS_LOG_BYTES_PATTERN.finditer(content) if match.group(1) != b'-')
 
 
-def access_log_traffic_stats(candidate, roots, sample_size=128 * 1024):
+def access_log_traffic_stats(candidate, roots, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):
+    sample_size = validate_access_log_sample_size(sample_size)
     if not is_allowed_log_path(candidate, roots):
         return {'downloaded_bytes': 0, 'uploaded_bytes': None, 'uploaded_complete': False, 'has_data': False}
     path = Path(candidate)
@@ -165,7 +175,8 @@ def access_log_traffic_stats(candidate, roots, sample_size=128 * 1024):
     }
 
 
-def access_log_traffic_totals(candidates, roots, sample_size=128 * 1024):
+def access_log_traffic_totals(candidates, roots, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):
+    sample_size = validate_access_log_sample_size(sample_size)
     stats = [access_log_traffic_stats(path, roots, sample_size) for path in dict.fromkeys(candidates)]
     data = [item for item in stats if item['has_data']]
     upload_data = [item for item in data if item['uploaded_bytes'] is not None]

@@ -295,6 +295,30 @@ function renderTrafficTop(result) {
   }).join('');
 }
 
+function ensureAccessLogSampleForm() {
+  if (query('#access-log-sample-form')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section access-log-sample-section';
+  section.innerHTML = '<div class="section-heading"><h2>TOP-5 по трафику</h2><i data-lucide="activity"></i></div><form id="access-log-sample-form"><label>Размер выборки, МБ<input id="access-log-sample-mib" name="access_log_sample_mib" type="number" min="0.000001" max="100" step="0.000001" required></label><p class="muted small">Сколько последних данных считывать из каждого access log. Максимум 100 МБ.</p><div id="access-log-sample-result" class="operation-result" hidden></div><button class="button primary" type="submit"><i data-lucide="save"></i>Сохранить размер</button></form>';
+  query('#view-settings .settings-layout').append(section);
+  section.querySelector('#access-log-sample-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const sampleBytes = Math.round(Number(query('#access-log-sample-mib').value) * 1000000);
+      const result = await request('settings', {access_log_sample_bytes: sampleBytes});
+      showResult('#access-log-sample-result', result.message, true);
+    }, '#access-log-sample-result');
+  });
+  icons();
+}
+
+async function refreshAccessLogSampleSettings() {
+  ensureAccessLogSampleForm();
+  const result = await request('settings');
+  query('#access-log-sample-mib').value = (result.access_log_sample_bytes / 1000000).toFixed(6);
+  query('#access-log-sample-result').hidden = true;
+}
+
 async function refreshTrafficTop() {
   try {
     const traffic = await request('traffic');
@@ -532,9 +556,10 @@ async function route() {
       await refreshTwoFactorSettings();
       await refreshSessionTimeoutSettings();
       await refreshLogRetentionSettings();
+      await refreshAccessLogSampleSettings();
       await refreshTrafficMaintenanceSettings();
       const layout = query('#view-settings .settings-layout');
-      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'));
+      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.access-log-sample-section'));
     }
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }

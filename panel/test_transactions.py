@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from panel.transactions import OperationError, access_log_traffic_totals, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, ensure_global_maintenance_include, ensure_traffic_log_format, issue_webroot_certificate, render_global_maintenance_snippet, set_global_traffic_block, validate_certificate_request
+from panel.transactions import ACCESS_LOG_SAMPLE_MAX_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, ensure_global_maintenance_include, ensure_traffic_log_format, issue_webroot_certificate, render_global_maintenance_snippet, set_global_traffic_block, validate_certificate_request
 
 
 class TransactionTests(unittest.TestCase):
@@ -141,6 +141,21 @@ class TransactionTests(unittest.TestCase):
             log.write_text('127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 345 712 "-" "test"\n')
             totals = access_log_traffic_totals([str(log)], [root])
             self.assertEqual(totals, {'downloaded_bytes': 345, 'uploaded_bytes': 712, 'uploaded_complete': True})
+
+    def test_access_log_traffic_uses_configurable_tail_and_caps_sample_at_100_mb(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'access.log'
+            earlier = b'127.0.0.1 - - [04/Oct/2026:12:00:00 +0000] "GET /old HTTP/1.1" 200 900 10 "-" "test"\n'
+            latest = b'127.0.0.1 - - [04/Oct/2026:12:00:01 +0000] "GET /new HTTP/1.1" 200 200 20 "-" "test"\n'
+            log.write_bytes(earlier + latest)
+            totals = access_log_traffic_totals([str(log)], [root], len(latest))
+            self.assertEqual(totals, {'downloaded_bytes': 200, 'uploaded_bytes': 20, 'uploaded_complete': True})
+            accepted = access_log_traffic_totals([str(log)], [root], ACCESS_LOG_SAMPLE_MAX_BYTES)
+            self.assertEqual(accepted['downloaded_bytes'], 1100)
+            for invalid in (0, ACCESS_LOG_SAMPLE_MAX_BYTES + 1, True, 1.5):
+                with self.subTest(invalid=invalid), self.assertRaises(OperationError):
+                    access_log_traffic_totals([str(log)], [root], invalid)
 
     def test_access_log_traffic_marks_upload_unknown_for_combined_format(self):
         with tempfile.TemporaryDirectory() as directory:

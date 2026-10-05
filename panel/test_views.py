@@ -6,7 +6,7 @@ from django.test import Client, TestCase
 
 import pyotp
 
-from .models import AuditEvent, Server, TwoFactorCredential
+from .models import AuditEvent, Server, ServiceSetting, TwoFactorCredential
 from .two_factor import generate_totp_secret, provisioning_uri
 
 
@@ -111,6 +111,7 @@ class AuthenticationTests(TestCase):
             response = self.client.get('/api/traffic/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), ranked)
+        manager_for.return_value.traffic_top.assert_called_once_with(sample_size=128 * 1024)
 
     def test_log_retention_setting_is_persisted_and_validated(self):
         self.client.force_login(self.user)
@@ -118,11 +119,24 @@ class AuthenticationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['log_retention_days'], 30)
         self.assertEqual(response.json()['session_timeout_hours'], 24)
+        self.assertEqual(response.json()['access_log_sample_bytes'], 128 * 1024)
         response = self.client.post('/api/settings/', {'log_retention_days': 45}, content_type='application/json')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get('/api/settings/').json()['log_retention_days'], 45)
         response = self.client.post('/api/settings/', {'log_retention_days': 0}, content_type='application/json')
         self.assertEqual(response.status_code, 400)
+
+    def test_access_log_sample_size_is_persisted_and_cannot_exceed_100_mb(self):
+        self.client.force_login(self.user)
+        maximum = 100_000_000
+        response = self.client.post('/api/settings/', {'access_log_sample_bytes': maximum}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(self.client.get('/api/settings/').json()['access_log_sample_bytes'], maximum)
+        self.assertEqual(ServiceSetting.get_solo().access_log_sample_bytes, maximum)
+        for invalid in (0, maximum + 1, True, 1.5):
+            with self.subTest(invalid=invalid):
+                response = self.client.post('/api/settings/', {'access_log_sample_bytes': invalid}, content_type='application/json')
+                self.assertEqual(response.status_code, 400)
 
     def test_traffic_maintenance_path_and_state_are_server_scoped(self):
         self.client.force_login(self.user)

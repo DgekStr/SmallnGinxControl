@@ -81,6 +81,9 @@ else
 fi
 git pull --ff-only origin main
 .venv/bin/pip install -r requirements.txt
+set -a
+. /etc/smallnginxcontrol.env
+set +a
 .venv/bin/python manage.py migrate --noinput
 .venv/bin/python manage.py collectstatic --noinput
 .venv/bin/python manage.py check
@@ -106,6 +109,8 @@ Generated local и SSH host configs подключают `snippets/maintenance_a
 ## Логи и retention
 
 В `Настройки → Хранение логов` задаётся срок 1–3650 дней (по умолчанию 30). `smallnginxcontrol-log-cleanup.timer` запускается ежедневно примерно в 03:17: активные `/var/log/nginx/*-data.log` ротируются, nginx получает reopen, а архивы старше срока хранения удаляются. Другие журналы nginx команда не трогает. Проверка расписания: `systemctl list-timers smallnginxcontrol-log-cleanup.timer`; журнал работы: `journalctl -u smallnginxcontrol-log-cleanup.service`.
+
+В `Настройки → TOP-5 по трафику` задаётся размер хвоста каждого access log для sampled traffic: default 128 КиБ, диапазон 1 байт–100 МБ. Настройка сохраняется в БД панели и применяется к локальным и SSH-managed nginx; просмотр содержимого журнала остаётся ограничен последними 128 КиБ.
 
 Не редактируйте один nginx-файл параллельно через панель, shell, Certbot и другие средства. Перед production-операциями изучите конфиг, его include и журналы; сначала используйте `nginx -t`.
 

@@ -285,6 +285,9 @@ class NginxTests(SimpleTestCase):
         self.assertEqual([item['name'] for item in result['items']], ['alpha.test', 'gamma.test', 'beta.test'])
         self.assertEqual([item['bytes'] for item in result['items']], [1400, 700, 200])
         self.assertEqual(result['hosts']['conf.d/alpha.test.conf'], {'downloaded_bytes': 1400, 'uploaded_bytes': 1420, 'uploaded_complete': True})
+        custom = manager.traffic_top(sample_size=4096)
+        self.assertEqual(custom['sample_bytes_per_log'], 4096)
+        self.assertEqual([item['bytes'] for item in custom['items']], [1400, 700, 200])
 
     def test_enable_host_logging_updates_enabled_and_disabled_configs(self):
         active = self.manager.root / 'conf.d' / 'active.test.conf'

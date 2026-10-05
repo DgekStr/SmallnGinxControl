@@ -20,7 +20,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from .metrics import snapshot
 from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting, TwoFactorCredential
 from .servers import AddressForm, ServerForm, initialize_demo, manager_for, public_server, selected_server
-from .transactions import OperationError
+from .transactions import ACCESS_LOG_SAMPLE_MAX_BYTES, OperationError
 from .two_factor import generate_totp_secret, provisioning_uri, qr_data_uri, verify_totp
 
 
@@ -196,11 +196,12 @@ def api(request, resource):
                 return JsonResponse({'enabled': bool(credential and credential.enabled)})
             if resource == 'settings':
                 service_settings = ServiceSetting.get_solo()
-                return JsonResponse({'log_retention_days': service_settings.log_retention_days, 'session_timeout_hours': service_settings.session_timeout_hours})
+                return JsonResponse({'log_retention_days': service_settings.log_retention_days, 'session_timeout_hours': service_settings.session_timeout_hours, 'access_log_sample_bytes': service_settings.access_log_sample_bytes})
             if resource == 'overview':
                 return JsonResponse({'server': server.host, 'server_id': server.pk, 'server_name': server.name, 'mode': server.mode, 'nginx': manager.status(), 'metrics': snapshot(server)})
             if resource == 'traffic':
-                return JsonResponse(manager.traffic_top())
+                sample_size = ServiceSetting.get_solo().access_log_sample_bytes
+                return JsonResponse(manager.traffic_top(sample_size=sample_size))
             if resource == 'hosts':
                 return JsonResponse(manager.inventory())
             if resource == 'config':
@@ -324,6 +325,12 @@ def api(request, resource):
                     raise OperationError('Срок admin-сессии должен быть целым числом от 1 до 720 часов.')
                 service_settings.session_timeout_hours = timeout_hours
                 updated_fields.append('session_timeout_hours')
+            if 'access_log_sample_bytes' in data:
+                sample_size = data['access_log_sample_bytes']
+                if type(sample_size) is not int or not 1 <= sample_size <= ACCESS_LOG_SAMPLE_MAX_BYTES:
+                    raise OperationError('Размер выборки access log должен быть целым числом от 1 байта до 100 МБ.')
+                service_settings.access_log_sample_bytes = sample_size
+                updated_fields.append('access_log_sample_bytes')
             if not updated_fields:
                 raise OperationError('Укажите настройку для сохранения.')
             service_settings.save(update_fields=[*updated_fields, 'updated_at'])

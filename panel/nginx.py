@@ -12,7 +12,7 @@ import portalocker
 from django.conf import settings
 
 from .transactions import (
-    OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
+    ACCESS_LOG_SAMPLE_DEFAULT_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
     certificate_days_remaining, configure_host_access_logs, delete_config_transaction,
     ensure_traffic_log_format, issue_webroot_certificate, set_global_traffic_block as apply_global_traffic_block,
     validate_certificate_request, validate_maintenance_page_path,
@@ -554,7 +554,7 @@ class NginxManager:
             )
             return 'Хост создан, SSL сертификат выпущен и HTTPS включён. ' + str(result)
 
-    def traffic_top(self, limit=5):
+    def traffic_top(self, limit=5, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):
         totals = []
         hosts = {}
         for item in self.inventory()['items']:
@@ -563,7 +563,7 @@ class NginxManager:
             except (OperationError, OSError, UnicodeError):
                 continue
             paths, _ = configured_log_paths(nodes, 'access')
-            traffic = access_log_traffic_totals(paths, self.allowed_log_roots)
+            traffic = access_log_traffic_totals(paths, self.allowed_log_roots, sample_size)
             hosts[item['id']] = traffic
             total = traffic['downloaded_bytes']
             if not item['enabled'] or item['maintenance']:
@@ -571,7 +571,7 @@ class NginxManager:
             if total:
                 totals.append({'name': item['name'], 'kind': item['kind'], 'bytes': total})
         totals.sort(key=lambda entry: (-entry['bytes'], entry['name'].casefold()))
-        return {'items': totals[:max(1, min(5, limit))], 'hosts': hosts, 'sample_bytes_per_log': 128 * 1024}
+        return {'items': totals[:max(1, min(5, limit))], 'hosts': hosts, 'sample_bytes_per_log': sample_size}
 
     def logs(self, identifier='', kind='access', lines=150):
         if kind not in {'access', 'error'}:
