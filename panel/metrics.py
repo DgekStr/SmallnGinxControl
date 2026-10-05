@@ -8,11 +8,27 @@ from pathlib import Path
 import portalocker
 import psutil
 from django.conf import settings
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
 from django.db.models import Max
 from django.utils import timezone
 
 from .models import MetricSample, Server
+
+
+def enable_sqlite_wal(db_connection=None):
+    db_connection = connection if db_connection is None else db_connection
+    if getattr(db_connection, 'vendor', 'sqlite') != 'sqlite':
+        return False
+    database_name = str(getattr(db_connection, 'settings_dict', {}).get('NAME', ''))
+    if database_name == ':memory:' or 'mode=memory' in database_name:
+        return False
+    cursor = db_connection.cursor()
+    try:
+        cursor.execute('PRAGMA journal_mode=WAL')
+        mode = cursor.fetchone()[0].lower()
+    finally:
+        cursor.close()
+    return mode == 'wal'
 
 
 def collect_completed(pending, previous, due, now):
@@ -118,6 +134,11 @@ def collect(stop):
 def start_collector():
     lock = portalocker.Lock(str(settings.STATE_DIR / 'metrics.lock'), timeout=0)
     lock.acquire()
+    try:
+        enable_sqlite_wal()
+    except Exception:
+        lock.release()
+        raise
     stop = threading.Event()
     thread = threading.Thread(target=collect, args=(stop,), name='metrics', daemon=True)
     thread.start()

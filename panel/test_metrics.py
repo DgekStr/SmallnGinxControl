@@ -1,11 +1,23 @@
 from concurrent.futures import Future
+import sqlite3
+import tempfile
+from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from .metrics import collect_completed
+from .metrics import collect_completed, enable_sqlite_wal
 
 
 class MetricCollectorTests(SimpleTestCase):
+    def test_enable_sqlite_wal_for_file_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            connection = sqlite3.connect(Path(directory) / 'panel.sqlite3')
+            try:
+                self.assertTrue(enable_sqlite_wal(connection))
+                self.assertEqual(connection.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            finally:
+                connection.close()
+
     def test_failed_future_is_removed_and_scheduled_for_retry(self):
         future = Future()
         future.set_exception(RuntimeError('database is locked'))

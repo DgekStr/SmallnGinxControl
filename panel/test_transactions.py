@@ -157,6 +157,18 @@ class TransactionTests(unittest.TestCase):
                 with self.subTest(invalid=invalid), self.assertRaises(OperationError):
                     access_log_traffic_totals([str(log)], [root], invalid)
 
+    def test_access_log_traffic_handles_ten_megabyte_sample(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'access.log'
+            latest = b'127.0.0.1 - - [05/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 345 712 "-" "test"\n'
+            log.write_bytes(b'x' * (10_000_000 - len(latest)) + latest)
+
+            totals = access_log_traffic_totals([str(log)], [root], 10_000_000)
+
+            self.assertEqual(totals['downloaded_bytes'], 345)
+            self.assertEqual(totals['uploaded_bytes'], 712)
+
     def test_access_log_traffic_marks_upload_unknown_for_combined_format(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
