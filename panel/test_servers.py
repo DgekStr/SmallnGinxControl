@@ -89,12 +89,14 @@ class ServerTests(TestCase):
 
     def test_ssh_manager_sends_challenge_and_final_tls_configs(self):
         manager = SSHManager.__new__(SSHManager)
-        manager.server = Mock(log_root='/var/log/nginx')
+        manager.server = Mock(log_root='/var/log/nginx', nginx_root='/etc/nginx')
         manager.parser = NginxManager(demo=True)
         data = {'name': 'secure.example.com', 'kind': 'proxy', 'port': 80, 'target': 'http://127.0.0.1:3000', 'issue_ssl': True, 'ssl_email': 'ops@example.com'}
         with patch.object(manager, 'inventory', return_value={'items': []}), patch.object(manager, 'rpc', return_value='ok') as rpc:
             manager.create(data)
         payload = rpc.call_args.args[1]
+        self.assertIn('include /etc/nginx/snippets/maintenance_all.conf;', payload['content'])
+        self.assertIn('include /etc/nginx/snippets/maintenance_all.conf;', payload['https_content'])
         self.assertTrue(payload['issue_ssl'])
         self.assertIn('/.well-known/acme-challenge/', payload['content'])
         self.assertIn('return 301 https://$host$request_uri;', payload['https_content'])

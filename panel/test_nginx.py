@@ -72,12 +72,20 @@ class NginxTests(SimpleTestCase):
         data = {'name': 'secure.example.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:3000', 'port': 80, 'ssl_email': 'ops@example.test'}
         _, _, challenge = self.manager.render_site(data, challenge=True)
         _, _, https = self.manager.render_site(data, https=True)
+        include = (self.manager.root / 'snippets' / 'maintenance_all.conf').as_posix()
+        self.assertIn('include ' + include + ';', challenge)
+        self.assertIn('include ' + include + ';', https)
         self.assertIn('/.well-known/acme-challenge/', challenge)
         self.assertNotIn('return 301 https://', challenge)
         self.assertIn('return 301 https://$host$request_uri;', https)
         self.assertIn('listen 443 ssl;', https)
         self.assertIn('/etc/letsencrypt/live/secure.example.test/fullchain.pem', https)
         self.assertIn('proxy_pass http://127.0.0.1:3000;', https)
+
+    def test_static_site_uses_index_htm_and_common_error_snippet(self):
+        _, _, content = self.manager.render_site({'name': 'glinskaya.dgek.ru', 'kind': 'host', 'target': '/var/www/glinskaya'})
+        self.assertIn('index index.html index.htm;', content)
+        self.assertIn('include ' + (self.manager.root / 'snippets' / 'maintenance_all.conf').as_posix() + ';', content)
 
     def test_demo_cannot_request_real_ssl_certificate(self):
         data = {'name': 'secure.example.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80, 'issue_ssl': True, 'ssl_email': 'ops@example.test'}

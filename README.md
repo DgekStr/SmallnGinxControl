@@ -10,12 +10,15 @@
 - Per-host counters «скачано/отправлено» в таблицах: `$bytes_sent` и `$request_length` по выборке последних 128 КиБ access log; TOP-5 ранжирует по скачанным данным, `~` помечает частичный upload sample.
 - Списки hosts и reverse proxy сортируются по алфавиту; рядом с валидным hostname есть 🔗 ссылка с правильными HTTP/HTTPS scheme и портом.
 - Экспорт выбранного access/error журнала в XML с группировкой по источникам и безопасным escaping.
-- SSD/root disk occupancy для local, SSH и demo профилей; значение привязано к выбранному серверу.
+- SSD/root disk occupancy для local, SSH и demo профилей: общий размер раздела и процент заполнения; значение привязано к выбранному серверу.
 - Стандартная TOTP 2FA для администратора: Google Authenticator-compatible QR, encrypted secret storage и обязательный OTP при входе; для 2-fa.com предусмотрен ручной ввод ключа без передачи секрета сайту.
 - Startup ускорен параллельной загрузкой inventory, traffic и overview с переиспользованием traffic response.
+- Collector восстанавливается после временных SQLite busy/locked ошибок; в обзоре показываются версия nginx, ОС и свежие сетевые rates.
+- Время admin-сессии настраивается от 1 до 720 часов; после успешного TOTP входа применяется обычный срок, а не временное окно OTP.
+- Глобальная HTTP/HTTPS traffic lock с настраиваемой maintenance page, транзакционным восстановлением и исключением control-plane vhost; raw TCP streams не меняются.
+- У новых host configs подключается общий error snippet, статический сайт поддерживает `index.htm`, ошибки 403/404 и 5xx могут показывать maintenance page.
+- Удаление стандартных managed vhost/reverse-proxy с подтверждением; активный сайт получает явное предупреждение о прекращении обслуживания, файлы и symlinks удаляются транзакционно с backup/rollback, конфигурация панели защищена.
 - Добавлен корневой MIT LICENSE.
-
-![Обзор сервера](doc/images/overview.png)
 
 Другие снимки: [reverse proxy в обслуживании](doc/images/proxies-maintenance.png), [список серверов](doc/images/servers.png), [мобильный интерфейс](doc/images/servers-mobile.png).
 
@@ -53,7 +56,7 @@ ssh -N -L 7444:127.0.0.1:7444 USER@SERVER_IP
 
 Оставьте SSH-сеанс открытым и на клиенте перейдите на http://127.0.0.1:7444. Для постоянного доступа по сети установите production-сервис версии `v1.0.2`; оставьте приложение на loopback, поставьте перед ним HTTPS reverse-proxy и ограничьте доступ firewall. Подробности: [HTTPS и deployment](doc/deployment.md#https-доступ).
 
-Для установки Linux-сервиса из git-тега версии `v1.0.2` используйте [deploy/install.sh](deploy/install.sh) или пошаговую [инструкцию](doc/deployment.md). Установщик запускается от root, клонирует выбранный тег, создаёт production state вне репозитория и запрашивает пароль администратора только в терминале. По умолчанию приложение доступно через SSH-туннель, без открытого HTTP-порта.
+Для воспроизводимой установки release `v1.0.2` используйте [deploy/install.sh](deploy/install.sh) или [инструкцию](doc/deployment.md). Тег — неизменяемый snapshot и может быть старше текущей `main`; для свежей установки текущей ветки задайте `SNC_RELEASE_TAG=main`. Незакоммиченные файлы рабочего дерева в Git clone не попадают. Установщик создаёт production state вне репозитория и запрашивает пароль администратора только в терминале.
 
 Production требует Python 3.12+, systemd и nginx. Допускается отдельный TLS reverse-proxy перед loopback upstream. Для частного IP self-signed сертификат не будет автоматически доверенным браузером; для публично доверенного TLS используйте DNS-имя и сертификат от доверенного CA.
 
@@ -66,7 +69,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 - Длительность admin-сессии настраивается в часах (1–720); по умолчанию 24 часа и применяется к текущему и новым входам.
 - Глобальная HTTP/HTTPS traffic lock для активных hosts/reverse proxy с транзакционным восстановлением конфигов; путь HTML-заглушки настраивается в модальном окне. Control-plane vhost сохраняет доступ для снятия блокировки, raw TCP streams не меняются.
 - Uptime дней/часов, пики CPU и LAN, текущая CPU/RAM, RX/TX в МБ и скорости в МБ/с.
-- Занятость системного SSD/root-раздела в процентах с индикатором использования.
+- Объём и занятость системного SSD/root-раздела для каждого сервера с индикатором использования.
 - TOTP-защита administrator account, совместимая с Google Authenticator: enrollment через QR, encrypted secret storage и подтверждение второго фактора при каждом входе.
 - TOP-5 активных vhost/reverse proxy по отданным bytes-sent из access logs, с убывающими горизонтальными графиками.
 - Срок хранения host logs задаётся в Настройках; ежедневный systemd timer ротирует и очищает только `*-data.log`.
@@ -80,7 +83,7 @@ Production требует Python 3.12+, systemd и nginx. Допускается
 - Резервная копия, блокировка параллельных операций, проверка revision, атомарная запись и откат при ошибке проверки/reload.
 - Отключённый reverse proxy остаётся активным vhost и показывает `/var/www/html/maitenance.html` с HTTP 503; включение восстанавливает исходную конфигурацию байт-в-байт.
 - Чтение access/error логов из `SNC_LOG_ROOT` и дополнительных явно разрешённых путей `SNC_LOG_EXTRA_ROOTS` (по умолчанию `/var/http`), включая логи per-host, заданные в nginx-конфигах.
-- Удаление только отключённых стандартных vhost/reverse-proxy с подтверждением; nginx-файл и symlinks удаляются, резервная копия остаётся в state/backups. Активный хост сначала нужно отключить.
+- Удаление стандартных managed vhost/reverse-proxy с подтверждением; активный сайт получает явное предупреждение о прекращении обслуживания, файлы и symlinks удаляются транзакционно с backup/rollback, конфигурация панели защищена.
 - Последние 50/150/500 строк журналов, автообновление, скачивание фрагмента.
 - Аудит успешных и ошибочных операций, смена пароля, мобильная навигация, две темы.
 
@@ -131,7 +134,7 @@ npm run test:e2e
 
 В Windows тесты используют установленный Google Chrome; браузер можно выбрать через SNC_TEST_BROWSER. В Linux предварительно выполнить `npx playwright install chromium`. Тесты запускаются в отдельной локальной демосреде; рабочее демо не меняют. Готовые ресурсы находятся в static/vendor, Node.js нужен только для их обновления и тестов. Изображение static/brand.png взято из предоставленного проекта CRM/focuslens-site/assets/logo_dark_tile.png. Лицензии библиотек сохранены рядом с ресурсами.
 
-Проверки tagged-релиза v1.0.1: **55 backend-тестов и 7 Playwright-сценариев**. Текущая версия `v1.0.2`: **80 backend-тестов и 14 Playwright-сценариев**, Django checks, migration consistency и JS syntax. На production включены per-host access logs для 44 server-блоков, ежедневный systemd cleanup с настраиваемым retention, TOP-5 sampled traffic и per-host download/upload counters. Подробности и ограничения предыдущего релиза: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html), [production deployment](doc/deployment.md).
+Текущий рабочий набор содержит **88 backend-тестов и 14 Playwright-сценариев**; E2E покрывает responsive overview, session/2FA, domain inventory, server profiles, maintenance и active-host deletion. `manage.py check`, migration consistency и JS syntax checks используются перед deployment. На production включены per-host access logs, traffic metrics с retry после transient SQLite lock, настраиваемый retention, maintenance error page и подробные network/SSD/service-version metrics. Условия Git clone и versioned release описаны в [deployment guide](doc/deployment.md); документация v1.0.1: [release notes](doc/release-v1.0.1.md), [HTML-описание](doc/release-v1.0.1.html).
 
 
 ## Документы

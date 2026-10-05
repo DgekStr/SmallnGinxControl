@@ -430,7 +430,7 @@ class NginxManager:
             apply_transaction(change, rollback, self.validate, self.reload)
             return summary
 
-    def render_site(self, data, log_root=None, *, challenge=False, https=False):
+    def render_site(self, data, log_root=None, *, challenge=False, https=False, maintenance_include=None):
         name = data.get('name', '').strip().lower()
         if len(name) > 190 or not re.fullmatch(r'(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', name):
             raise OperationError('Введите корректное доменное имя (IDN в punycode).')
@@ -444,6 +444,9 @@ class NginxManager:
             validate_certificate_request(name, data.get('ssl_email'))
             if port != 80:
                 raise OperationError('Для HTTP-01 SSL challenge у нового хоста должен быть порт 80.')
+        maintenance_include = str(maintenance_include or self.root / 'snippets' / 'maintenance_all.conf').replace('\\', '/')
+        if not re.fullmatch(r'/?[A-Za-z0-9_./:-]+', maintenance_include) or '..' in PurePosixPath(maintenance_include).parts:
+            raise OperationError('Некорректный путь к общему error snippet nginx.')
         kind, target = data.get('kind'), data.get('target', '').strip()
         if kind == 'proxy':
             parsed = urlsplit(target)
@@ -457,7 +460,7 @@ class NginxManager:
         elif kind == 'host':
             if not re.fullmatch(r'/[a-zA-Z0-9_./-]+', target) or '..' in Path(target).parts:
                 raise OperationError('Укажите абсолютный путь к каталогу сайта.')
-            location = f'root {target};\n        index index.html;\n        try_files $uri $uri/ =404;'
+            location = f'root {target};\n        index index.html index.htm;\n        try_files $uri $uri/ =404;'
         else:
             raise OperationError('Неизвестный тип хоста.')
         filename = name.replace('*', 'wildcard') + '.conf'
@@ -476,12 +479,14 @@ class NginxManager:
             cert_dir = cert_root / name
             http_block = (
                 f'server {{\n    listen 80;\n    listen [::]:80;\n    server_name {name};\n'
+                f'    include {maintenance_include};\n'
                 f'    access_log {access_log};\n    error_log {error_log} warn;\n\n'
                 f'{challenge_location}\n'
                 '    location / {\n        return 301 https://$host$request_uri;\n    }\n}\n'
             )
             https_block = (
                 f'\nserver {{\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    server_name {name};\n'
+                f'    include {maintenance_include};\n'
                 f'    ssl_certificate {cert_dir}/fullchain.pem;\n'
                 f'    ssl_certificate_key {cert_dir}/privkey.pem;\n'
                 '    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_session_tickets off;\n'
@@ -491,7 +496,7 @@ class NginxManager:
             content = http_block + https_block
         else:
             challenge_block = challenge_location + '\n' if challenge else ''
-            content = f'server {{\n    listen {port};\n    server_name {name};\n    access_log {access_log};\n    error_log {error_log} warn;\n\n{challenge_block}    location / {{\n        {location}\n    }}\n}}\n'
+            content = f'server {{\n    listen {port};\n    server_name {name};\n    include {maintenance_include};\n    access_log {access_log};\n    error_log {error_log} warn;\n\n{challenge_block}    location / {{\n        {location}\n    }}\n}}\n'
         self.syntax(content)
         return name, filename, content
 

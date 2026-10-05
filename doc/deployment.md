@@ -24,6 +24,16 @@ sudo ./deploy/install.sh
 
 `install.sh` предназначен для нового пустого хоста и запускается от root; при ручном клонировании установщику нужно задать `SNC_INSTALL_DIR` или использовать другой пустой каталог. Скрипт спрашивает IP/DNS панели, устанавливает Python-зависимости, создаёт env-файл с правами `0600`, запрашивает пароль администратора скрытым вводом, запускает миграции/bootstrap и включает systemd-сервис. Пароль не передаётся в аргументах процесса и не печатается. Требования Django к паролю: минимум 10 символов, не распространённый, не только цифры.
 
+По умолчанию установщик клонирует стабильный release tag `v1.0.2`. Чтобы на новом пустом хосте развернуть текущую ветку `main` через тот же installer, сначала получите его скрипт, затем явно задайте ref:
+
+```sh
+git clone --depth 1 --branch main https://github.com/DgekStr/SmallnGinxControl.git /tmp/smallnginxcontrol-installer
+cd /tmp/smallnginxcontrol-installer
+sudo env SNC_RELEASE_TAG=main ./deploy/install.sh
+```
+
+Установщик сам клонирует выбранную ветку в `/opt/smallnginxcontrol`; установка по-прежнему требует пустого install path и отсутствующих systemd/env files. Ветка `main` подвижна и не заменяет immutable release tag для воспроизводимых установок. `git clone` получает только committed/pushed файлы: незакоммиченные изменения в рабочей копии в remote clone не попадут.
+
 Проверить статус:
 
 ```sh
@@ -63,8 +73,12 @@ SNC_SECURE_COOKIES=1
 ```sh
 cd /opt/smallnginxcontrol
 git status --short
-git fetch origin
-git checkout main
+git fetch --depth=1 origin main
+if git show-ref --verify --quiet refs/heads/main; then
+    git switch main
+else
+    git switch -c main FETCH_HEAD
+fi
 git pull --ff-only origin main
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python manage.py migrate --noinput
@@ -81,11 +95,13 @@ systemctl enable --now smallnginxcontrol-log-cleanup.timer
 
 ## Reverse-proxy maintenance
 
+Generated local и SSH host configs подключают `snippets/maintenance_all.conf` во все созданные `server`-блоки. Общий handler показывает `/var/www/html/maitenance.html` при 403/404 и 500/502/503/504 (ответ клиенту — 503). Для статического host поддерживаются `index.html` и `index.htm`. Перед включением убедитесь, что файл заглушки существует и читается nginx.
+
 Стандартный выключаемый reverse proxy не удаляется из графа nginx: панель сохраняет оригинал в `$SNC_STATE_DIR/maintenance/`, включает `503` и показывает `/var/www/html/maitenance.html`. При включении оригинальный конфиг восстанавливается. Убедитесь, что файл страницы существует и читается пользователем nginx. Для proxy, уже подключающего `maintenance_all.conf`, используется имеющийся handler. Нестандартные include не переключаются автоматически.
 
 Журналы читаются по директивам `access_log`/`error_log` из `$SNC_LOG_ROOT` и дополнительных абсолютных корней из `SNC_LOG_EXTRA_ROOTS` (по умолчанию `/var/http`). Для SSH-серверов этот список передаётся remote worker; SSH-пользователь должен иметь право читать указанные файлы. Динамические пути и пути вне разрешённых roots остаются заблокированы.
 
-Удаление vhost доступно только после его отключения и явного подтверждения. Удаляются стандартный конфиг из `conf.d` или `sites-available` и относящиеся к нему `sites-enabled` links; активные vhost API отклоняет. Перед удалением создаётся резервная копия, затем выполняются `nginx -t` и reload с rollback при ошибке. Backup удалённого/исходного конфига сохраняется в `$SNC_STATE_DIR/backups`; удалённые backup автоматически не очищаются. Нестандартные include удалить из UI нельзя.
+Удаление стандартного управляемого vhost доступно из UI с явным подтверждением, в том числе для активного сайта: интерфейс предупреждает о прекращении обслуживания. Конфиг и относящиеся к нему `sites-enabled` links удаляются транзакционно; перед удалением создаётся резервная копия, затем выполняются `nginx -t` и reload с rollback при ошибке. Upstream текущей панели защищён от удаления. Backup сохраняется в `$SNC_STATE_DIR/backups`; автоматически не очищается. Stream-конфиги и нестандартные include удалить из UI нельзя.
 
 ## Логи и retention
 

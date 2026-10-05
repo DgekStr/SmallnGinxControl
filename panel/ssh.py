@@ -6,6 +6,7 @@ import socket
 import zlib
 from functools import lru_cache
 from pathlib import Path
+from pathlib import PurePosixPath
 
 import paramiko
 from cryptography.fernet import InvalidToken
@@ -138,12 +139,13 @@ class SSHManager:
         issue_ssl = data.get('issue_ssl', False)
         if type(issue_ssl) is not bool:
             raise OperationError('Признак выпуска SSL должен быть boolean.')
-        name, filename, content = self.parser.render_site(data, log_root=self.server.log_root, challenge=issue_ssl)
+        maintenance_include = str(PurePosixPath(self.server.nginx_root) / 'snippets' / 'maintenance_all.conf')
+        name, filename, content = self.parser.render_site(data, log_root=self.server.log_root, challenge=issue_ssl, maintenance_include=maintenance_include)
         if any(name in item['domains'] for item in self.inventory()['items']):
             raise OperationError('Такой домен уже есть в конфигурации сервера.')
         payload = {'id': 'conf.d/' + filename, 'content': content}
         if issue_ssl:
-            _, _, https_content = self.parser.render_site(data, log_root=self.server.log_root, https=True)
+            _, _, https_content = self.parser.render_site(data, log_root=self.server.log_root, https=True, maintenance_include=maintenance_include)
             payload.update({
                 'issue_ssl': True,
                 'ssl_domain': name,
