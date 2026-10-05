@@ -13,7 +13,7 @@
 <body class="login-page">
   <header class="login-header"><a class="brand" href="/"><img src="{% static 'brand.png' %}" alt=""><span>SmallnGinx<span class="brand-sub">Control</span></span></a><span class="muted small">FOCUSLENS / INFRASTRUCTURE</span></header>
   <main class="login-main">
-    <div class="login-heading"><span class="eyebrow">NGINX CONTROL PANEL</span><h1>Всё под контролем.</h1><p class="muted mono">{{ server }} <span class="text-cyan">/</span> :7444</p></div>
+    <div class="login-heading"><span class="eyebrow">NGINX CONTROL PANEL</span><h1>Всё под контролем.</h1></div>
     <form method="post" class="login-form">
       {% csrf_token %}
       {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}

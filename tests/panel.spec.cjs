@@ -2,6 +2,7 @@ const {test, expect} = require('@playwright/test');
 
 async function login(page, password = '12345') {
   await page.goto('/');
+  await expect(page.locator('.login-heading .mono')).toHaveCount(0);
   await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
   await page.locator('[name="password"]').fill(password);
   await page.getByRole('button', {name: 'Войти', exact: true}).click();
