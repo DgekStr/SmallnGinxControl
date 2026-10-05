@@ -15,8 +15,11 @@ test('overview renders assets, metrics and responsive layouts', async ({page}) =
   page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/traffic/') trafficRequests++; });
   await login(page);
   expect(trafficRequests).toBe(1);
+  await expect(page.locator('#nginx-version')).toHaveText('nginx/1.24.0');
+  await expect(page.locator('#system-name')).toHaveText('Ubuntu · демо');
   await expect(page.locator('#metric-uptime')).toContainText('дн');
   await expect(page.locator('#current-disk')).toContainText('%');
+  await expect(page.locator('#disk-capacity')).toHaveText('512 ГБ');
   await expect(page.locator('#disk-bar')).toHaveCSS('width', /.+/);
   await expect(page.locator('#top-traffic-list .traffic-rank')).toHaveCount(5);
   const trafficBytes = await page.locator('#top-traffic-list .traffic-rank').evaluateAll((rows) => rows.map((row) => Number(row.dataset.bytes)));

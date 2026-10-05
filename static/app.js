@@ -212,6 +212,8 @@ function renderMetrics() {
   const result = state.overview;
   if (!result) return;
   const metrics = result.metrics;
+  query('#nginx-version').textContent = result.nginx.version || 'nginx';
+  query('#system-name').textContent = result.nginx.system || '—';
   query('#health-badge').textContent = result.nginx.active ? 'Работает' : 'Остановлен';
   query('#health-badge').className = 'badge ' + (result.nginx.active ? 'success' : 'error');
   query('#connection-label').innerHTML = `<span class="status-dot ${metrics.stale ? 'off' : ''}"></span>${metrics.stale ? 'Нет свежих метрик' : result.mode === 'demo' ? 'Локальная среда' : 'Сервер доступен'}`;
@@ -222,7 +224,7 @@ function renderMetrics() {
     const details = query('.health-section .system-details');
     const heading = document.createElement('div');
     heading.className = 'resource-heading';
-    heading.innerHTML = '<span><i data-lucide="hard-drive"></i>SSD-диск /</span><strong id="current-disk">—</strong>';
+    heading.innerHTML = '<span><i data-lucide="hard-drive"></i>SSD-диск / <small id="disk-capacity">—</small></span><strong id="current-disk">—</strong>';
     const track = document.createElement('div');
     track.className = 'progress-track';
     track.innerHTML = '<div id="disk-bar" class="green-bar"></div>';
@@ -242,6 +244,7 @@ function renderMetrics() {
   const diskTotal = Number(current.disk_total_bytes) || 0;
   const diskUsed = Number(current.disk_used_bytes) || 0;
   const diskPercent = diskTotal > 0 ? Math.min(100, diskUsed / diskTotal * 100) : 0;
+  query('#disk-capacity').textContent = diskTotal > 0 ? trafficSize(diskTotal) : '—';
   query('#current-disk').textContent = diskTotal > 0 ? number(diskPercent) + '%' : '—';
   query('#current-disk').title = diskTotal > 0 ? `Занято ${trafficSize(diskUsed)} из ${trafficSize(diskTotal)} на разделе /` : 'Данные о диске недоступны';
   query('#cpu-bar').style.width = Math.min(100, current.cpu) + '%';
