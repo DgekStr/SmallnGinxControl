@@ -27,6 +27,21 @@ for command in git python3 systemctl; do
     command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 1; }
 done
 
+INSTALL_STARTED=0
+cleanup_failed_install() {
+    local exit_code=$?
+    trap - EXIT
+    if (( exit_code != 0 && INSTALL_STARTED )); then
+        echo 'Installation failed; removing generated service configuration. State data was preserved.' >&2
+        systemctl disable --now smallnginxcontrol >/dev/null 2>&1 || true
+        systemctl disable --now smallnginxcontrol-log-cleanup.timer >/dev/null 2>&1 || true
+        rm -f "$SERVICE_FILE" "$CLEANUP_SERVICE_FILE" "$CLEANUP_TIMER_FILE" "$ENV_FILE"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    exit "$exit_code"
+}
+trap cleanup_failed_install EXIT
+
 if [[ -e $INSTALL_DIR || -L $INSTALL_DIR ]]; then
     checkout_ref=$(git -C "$INSTALL_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$INSTALL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)
     checkout_origin=$(git -C "$INSTALL_DIR" config --get remote.origin.url 2>/dev/null || true)
@@ -63,6 +78,7 @@ fi
 "$INSTALL_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-input -r "$INSTALL_DIR/requirements.txt"
 
 install -d -o root -g root -m 0700 "$STATE_DIR"
+INSTALL_STARTED=1
 umask 077
 cat > "$ENV_FILE" <<ENV
 SNC_MODE=local
