@@ -53,12 +53,17 @@ else
     git clone --depth 1 --branch "$RELEASE_TAG" "$REPOSITORY" "$INSTALL_DIR"
 fi
 
-read -r -p 'IP address or DNS name used to open the panel: ' PANEL_HOST
-PANEL_HOST=${PANEL_HOST%$'\r'}
-if [[ ! $PANEL_HOST =~ ^[A-Za-z0-9.-]+$ ]]; then
+while true; do
+    if ! read -r -p 'IP address or DNS name used to open the panel: ' PANEL_HOST; then
+        echo 'Could not read the panel address.' >&2
+        exit 1
+    fi
+    PANEL_HOST=${PANEL_HOST%$'\r'}
+    if [[ $PANEL_HOST =~ ^[A-Za-z0-9.-]+$ ]]; then
+        break
+    fi
     echo 'Enter a plain IPv4 address or DNS name, without scheme or port.' >&2
-    exit 1
-fi
+done
 
 if ! python3 -m venv "$INSTALL_DIR/.venv"; then
     rm -rf "$INSTALL_DIR/.venv"
@@ -115,9 +120,25 @@ install -o root -g root -m 0644 "$INSTALL_DIR/deploy/smallnginxcontrol-log-clean
 set -a
 . "$ENV_FILE"
 set +a
-read -r -s -p 'Initial administrator password (10+ characters, not numeric-only): ' SNC_INITIAL_PASSWORD
-printf '\n'
-export SNC_INITIAL_PASSWORD
+while true; do
+    if ! read -r -s -p 'Initial administrator password (10+ characters, not numeric-only): ' SNC_INITIAL_PASSWORD; then
+        printf '\n' >&2
+        echo 'Could not read the administrator password.' >&2
+        exit 1
+    fi
+    printf '\n'
+    export SNC_INITIAL_PASSWORD
+    if "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/manage.py" shell -c '
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+import os
+validate_password(os.environ["SNC_INITIAL_PASSWORD"], user=get_user_model()(username="admin"))
+' >/dev/null 2>&1; then
+        break
+    fi
+    unset SNC_INITIAL_PASSWORD
+    echo 'Password was rejected by Django. Choose a longer, uncommon password and retry.' >&2
+done
 "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/bootstrap.py"
 unset SNC_INITIAL_PASSWORD
 "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/manage.py" collectstatic --noinput
