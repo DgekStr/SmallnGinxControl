@@ -20,6 +20,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from .metrics import snapshot
 from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting, TwoFactorCredential
 from .panel_tls import MAX_PEM_BYTES, panel_certificate_path, panel_tls_status, renew_panel_certificate, replace_panel_certificate
+from .domain_expiry import enrich_inventory_domains
 from .servers import AddressForm, ServerForm, initialize_demo, manager_for, public_server, selected_server
 from .transactions import ACCESS_LOG_SAMPLE_MAX_BYTES, OperationError
 from .two_factor import generate_totp_secret, provisioning_uri, qr_data_uri, verify_totp
@@ -208,7 +209,11 @@ def api(request, resource):
                 sample_size = ServiceSetting.get_solo().access_log_sample_bytes
                 return JsonResponse(manager.traffic_top(sample_size=sample_size))
             if resource == 'hosts':
-                return JsonResponse(manager.inventory())
+                inventory = manager.inventory()
+                check_domain_expiry = settings.SNC_MODE != 'demo' and server.mode != 'demo'
+                force_domain_expiry = check_domain_expiry and server.mode == 'ssh' and request.GET.get('refresh_domains') == '1'
+                inventory['items'] = enrich_inventory_domains(inventory['items'], check=check_domain_expiry, force=force_domain_expiry)
+                return JsonResponse(inventory)
             if resource == 'config':
                 return JsonResponse(manager.read(request.GET.get('id', 'nginx.conf')))
             if resource == 'logs':
