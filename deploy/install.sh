@@ -28,9 +28,9 @@ for command in git python3 systemctl; do
 done
 
 if [[ -e $INSTALL_DIR || -L $INSTALL_DIR ]]; then
-    checkout_tag=$(git -C "$INSTALL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)
+    checkout_ref=$(git -C "$INSTALL_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$INSTALL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)
     checkout_origin=$(git -C "$INSTALL_DIR" config --get remote.origin.url 2>/dev/null || true)
-    if [[ $checkout_tag != "$RELEASE_TAG" || $checkout_origin != "$REPOSITORY" ]]; then
+    if [[ $checkout_ref != "$RELEASE_TAG" || $checkout_origin != "$REPOSITORY" ]]; then
         echo 'Install path exists but is not the requested release checkout; refusing to overwrite it.' >&2
         exit 1
     fi
@@ -47,8 +47,18 @@ fi
 
 if ! python3 -m venv "$INSTALL_DIR/.venv"; then
     rm -rf "$INSTALL_DIR/.venv"
-    echo 'Python venv support is missing. Install the matching python3-venv package and rerun.' >&2
-    exit 1
+    python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    venv_package="python${python_version}-venv"
+    if ! command -v apt-get >/dev/null || ! apt-get update || ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$venv_package"; then
+        printf 'Could not install %s automatically. Install it manually and rerun.\n' "$venv_package" >&2
+        exit 1
+    fi
+    if ! python3 -m venv "$INSTALL_DIR/.venv"; then
+        rm -rf "$INSTALL_DIR/.venv"
+        printf 'Could not create the virtual environment after installing %s.\n' "$venv_package" >&2
+        exit 1
+    fi
+    printf 'Installed %s and created the virtual environment.\n' "$venv_package"
 fi
 "$INSTALL_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-input -r "$INSTALL_DIR/requirements.txt"
 
