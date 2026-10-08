@@ -5,7 +5,7 @@ Production-установка клонирует версионированны�
 ## Требования
 
 - Ubuntu/Debian с systemd и Python 3.12+.
-- Git, nginx и доступ root для управления конфигурациями nginx.
+- Git и доступ root для управления конфигурациями nginx. Если nginx отсутствует на Debian/Ubuntu, installer установит его через `apt-get`.
 - Для выпуска Let's Encrypt сертификатов через UI: Certbot, webroot `/var/www/html`, публично разрешённый входящий TCP/80 и DNS-имя, направленное на этот сервер. Само приложение не устанавливает Certbot.
 - Сеть до GitHub/PyPI на время установки.
 - Для прямого управления локальным nginx: `/usr/sbin/nginx`, `/var/log/nginx` и работающий systemd unit `nginx`.
@@ -22,7 +22,7 @@ cd /opt/smallnginxcontrol
 sudo ./deploy/install.sh
 ```
 
-`install.sh` предназначен для нового пустого хоста и запускается от root; при ручном клонировании установщику нужно задать `SNC_INSTALL_DIR` или использовать другой пустой каталог. Скрипт спрашивает IP/DNS панели, устанавливает Python-зависимости, создаёт env-файл с правами `0600`, запрашивает пароль администратора скрытым вводом, запускает миграции/bootstrap и включает systemd-сервис. Пароль не передаётся в аргументах процесса и не печатается. Требования Django к паролю: минимум 10 символов, не распространённый, не только цифры. При ошибке после начала настройки installer останавливает созданные службы и удаляет созданные env/unit-файлы, сохраняя каталог state для безопасного повторного запуска.
+`install.sh` предназначен для нового пустого хоста и запускается от root; при ручном клонировании установщику нужно задать `SNC_INSTALL_DIR` или использовать другой пустой каталог. Скрипт спрашивает IP/DNS панели и пароль администратора (скрытый ввод), устанавливает зависимости, создаёт env-файл с правами `0600`, запускает миграции/bootstrap и включает systemd-сервис. Пароль не передаётся в аргументах процесса и не печатается. Требования Django к паролю: минимум 10 символов, не распространённый, не только цифры. Installer выпускает локальный self-signed сертификат с SAN для IP/DNS панели и `localhost`, настраивает nginx TLS frontend на `0.0.0.0:7444`, а Waitress оставляет на `127.0.0.1:7445`; HTTP upstream наружу не публикуется. При ошибке после начала настройки installer останавливает созданные службы и удаляет созданные TLS/env/unit-файлы, сохраняя каталог state для безопасного повторного запуска.
 
 По умолчанию установщик клонирует стабильный release tag `v1.0.2`. Чтобы на новом пустом хосте развернуть текущую ветку `main` через тот же installer, сначала получите его скрипт, затем явно задайте ref:
 
@@ -41,30 +41,23 @@ systemctl status smallnginxcontrol --no-pager
 journalctl -u smallnginxcontrol -n 100 --no-pager
 ```
 
-Приложение по умолчанию слушает только `127.0.0.1:7444`. Для первичного доступа используйте SSH-туннель:
+В production nginx принимает HTTPS на `0.0.0.0:7444`, Waitress слушает только `127.0.0.1:7445`. Откройте `https://SERVER-IP:7444`. Self-signed сертификат шифрует соединение, но не доверен клиентскому браузеру автоматически. Войдите в панель, откройте `Настройки → HTTPS панели`, скачайте публичный сертификат и добавьте его в доверенные сертификаты ОС/браузера; либо подтвердите предупреждение браузера. Не передавайте и не скачивайте приватный ключ.
+
+Для доступа через SSH-туннель используйте:
 
 ```sh
 ssh -N -L 7444:127.0.0.1:7444 root@SERVER
 ```
 
-Затем откройте `http://127.0.0.1:7444`. Не меняйте `SNC_BIND` на публичный интерфейс, чтобы «открыть порт».
+Затем откройте `https://localhost:7444`. Браузер покажет предупреждение, пока сертификат не будет доверен. Backend остаётся на loopback `127.0.0.1:7445`; не меняйте `SNC_BIND` на публичный интерфейс.
 
-В локальном demo `SNC_BIND=127.0.0.1` также является значением по умолчанию. `serve.py` завершит запуск с ошибкой, если demo привязать к адресу, отличному от loopback: демо-пароль `admin / 12345` не предназначен для сетевого доступа. Для просмотра demo с другого компьютера используйте SSH-туннель из README. Не обходите эту проверку сменой bind; для постоянного сетевого доступа используйте production mode с сильным паролем, HTTPS reverse-proxy и ограничением firewall.
+В локальном demo `SNC_BIND=127.0.0.1` и `SNC_PORT=7444` остаются значениями по умолчанию; demo обслуживается по HTTP и не меняет системный nginx. `serve.py` блокирует bind demo на сетевой интерфейс: пароль `admin / 12345` предназначен только для локального просмотра. Для постоянного сетевого доступа используйте production installer с TLS frontend и сильным паролем.
 
 ## HTTPS-доступ
 
-Для постоянного внешнего адреса оставьте Waitress на loopback и настройте TLS reverse-proxy. Например, HTTPS на `192.0.2.15:7445` (TEST-NET documentation address) — только пример для отдельной машины; перед применением проверьте, что порт свободен и текущая конфигурация nginx сохранена. TLS сертификат должен содержать IP SAN. Self-signed сертификат шифрует соединение, но браузеры будут показывать предупреждение до доверия сертификату. Для сертификата без предупреждений используйте DNS-имя и публично доверенный CA.
+В `Настройки → HTTPS панели` можно перевыпустить self-signed сертификат либо заменить его парой PEM certificate/private key. Принимается только незашифрованный private key, совпадающий с сертификатом; SAN должен покрывать настроенный IP/DNS панели. Перед заменой панель проверяет пару, выполняет `nginx -t` и reload; при неудаче восстанавливает предыдущие файлы и конфигурацию. Private key хранится в каталоге state с правами `0600`, никогда не возвращается в API и недоступен для скачивания.
 
-В env-файле установить:
-
-```sh
-SNC_LOG_EXTRA_ROOTS=/var/http
-SNC_CSRF_ORIGINS=https://PANEL-HOST:7445
-SNC_TRUST_PROXY=1
-SNC_SECURE_COOKIES=1
-```
-
-Затем выполнить `systemctl restart smallnginxcontrol`. Proxy обязан перезаписывать `Host` и `X-Forwarded-Proto`, а upstream должен оставаться `127.0.0.1:7444`. Разрешайте входящий TLS-порт только нужным сетям; не публикуйте backend HTTP напрямую.
+Для сертификата без предупреждений замените self-signed пару на сертификат доверенного CA, содержащий SAN для имени/IP панели. После перевыпуска self-signed сертификата клиентские устройства должны доверить новый публичный сертификат.
 
 ## Обновление существующей установки
 
@@ -91,6 +84,45 @@ systemctl restart smallnginxcontrol
 systemctl is-active smallnginxcontrol
 systemctl enable --now smallnginxcontrol-log-cleanup.timer
 ```
+
+Для существующей установки до TLS frontend не запускайте fresh `install.sh`: он откажется перезаписывать systemd/env. После fast-forward обновления кода и `pip install`, сделайте одноразовый переход, сохранив env вне репозитория:
+
+```sh
+sudo cp -a /etc/smallnginxcontrol.env /var/lib/smallnginxcontrol/env.pre-panel-tls
+sudo systemctl stop smallnginxcontrol
+sudo python3 - <<'PY'
+from pathlib import Path
+
+path = Path('/etc/smallnginxcontrol.env')
+lines = path.read_text().splitlines()
+values = dict(line.split('=', 1) for line in lines if '=' in line and not line.lstrip().startswith('#'))
+updates = {
+    'SNC_PORT': '7445',
+    'SNC_CSRF_ORIGINS': f"https://{values['SNC_SERVER']}:7444,https://localhost:7444",
+    'SNC_TRUST_PROXY': '1',
+    'SNC_SECURE_COOKIES': '1',
+}
+for key, value in updates.items():
+    prefix = key + '='
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[index] = prefix + value
+            break
+    else:
+        lines.append(prefix + value)
+path.write_text('\n'.join(lines) + '\n')
+path.chmod(0o600)
+PY
+sudo systemctl start smallnginxcontrol
+cd /opt/smallnginxcontrol
+set -a
+. /etc/smallnginxcontrol.env
+set +a
+sudo -E .venv/bin/python manage.py shell -c 'from panel.panel_tls import install_panel_tls; install_panel_tls()'
+sudo systemctl is-active smallnginxcontrol nginx
+```
+
+Затем проверьте `https://SNC_SERVER:7444/login/` и импортируйте публичный сертификат через `Настройки → HTTPS панели`. Если переключение не удалось, восстановите сохранённый env-файл и запустите службу, затем проверьте `nginx -t` и журнал до повторной попытки.
 
 Тег `v1.0.1` сохраняет предыдущий versioned release; текущая версия приложения — `v1.0.2`. Для установки предыдущего состояния используйте `git checkout v1.0.1`.
 

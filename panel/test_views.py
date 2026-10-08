@@ -2,6 +2,7 @@ from urllib.parse import urlencode
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 
 import pyotp
@@ -17,6 +18,7 @@ class AuthenticationTests(TestCase):
     def test_authentication_required(self):
         self.assertEqual(self.client.get('/').status_code, 302)
         self.assertEqual(self.client.get('/api/hosts/').status_code, 401)
+        self.assertEqual(self.client.get('/api/panel-tls/').status_code, 401)
 
     def test_login_password_change_logout(self):
         response = self.client.post('/login/', {'username': 'admin', 'password': '12345'})
@@ -97,6 +99,7 @@ class AuthenticationTests(TestCase):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.user)
         self.assertEqual(client.post('/api/service/', {'action': 'restart'}, content_type='application/json').status_code, 403)
+        self.assertEqual(client.post('/api/panel-tls/', {'action': 'renew'}, content_type='application/json').status_code, 403)
 
     def test_non_staff_is_rejected(self):
         user = get_user_model().objects.create_user('viewer', password='test')
@@ -186,3 +189,51 @@ class AuthenticationTests(TestCase):
             self.client.post('/login/', {'username': 'admin', 'password': 'wrong'})
         response = self.client.post('/login/', {'username': 'admin', 'password': '12345'})
         self.assertEqual(response.status_code, 429)
+
+
+class PanelTlsApiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('admin', password='12345', is_staff=True)
+        self.client.force_login(self.user)
+
+    def test_panel_tls_status_is_available_without_private_key(self):
+        status = {'available': True, 'installed': True, 'self_signed': True, 'fingerprint': 'AA:BB'}
+        with patch('panel.views.panel_tls_status', return_value=status):
+            response = self.client.get('/api/panel-tls/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), status)
+        self.assertNotIn('private_key', response.json())
+
+    def test_panel_tls_renewal_is_audited(self):
+        status = {'available': True, 'installed': True, 'self_signed': True}
+        with patch('panel.views.renew_panel_certificate', return_value=status) as renew:
+            response = self.client.post('/api/panel-tls/', {'action': 'renew'}, content_type='application/json')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        renew.assert_called_once_with()
+        self.assertTrue(AuditEvent.objects.filter(action='panel_tls_renew', target='192.0.2.15', success=True).exists())
+
+    def test_panel_certificate_pair_can_be_uploaded_as_multipart(self):
+        certificate = b'-----BEGIN CERTIFICATE-----\ncertificate\n'
+        private_key = b'-----BEGIN PRIVATE KEY-----\nprivate-key\n'
+        with patch('panel.views.replace_panel_certificate', return_value={'installed': True}) as replace:
+            response = self.client.post('/api/panel-tls/', {
+                'certificate': SimpleUploadedFile('certificate.pem', certificate),
+                'private_key': SimpleUploadedFile('private-key.pem', private_key),
+            })
+
+        self.assertEqual(response.status_code, 200, response.content)
+        replace.assert_called_once_with(certificate, private_key)
+        self.assertTrue(AuditEvent.objects.filter(action='panel_tls_replace', success=True).exists())
+
+    def test_panel_certificate_upload_size_is_limited(self):
+        oversized = b'x' * 200_001
+        with patch('panel.views.replace_panel_certificate') as replace:
+            response = self.client.post('/api/panel-tls/', {
+                'certificate': SimpleUploadedFile('certificate.pem', oversized),
+                'private_key': SimpleUploadedFile('private-key.pem', b'key'),
+            })
+
+        self.assertEqual(response.status_code, 400)
+        replace.assert_not_called()

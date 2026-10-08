@@ -178,6 +178,8 @@ class NginxManager:
                 content = path.read_bytes()
                 maintenance = is_maintenance_config(content)
                 nodes = self.parse(path)
+                if self._is_management_config(nodes):
+                    continue
                 links = self.links(path)
                 standard_conf = path.parent == self.root / 'conf.d'
                 standard_site = path.parent == self.root / 'sites-available'
@@ -263,6 +265,8 @@ class NginxManager:
         with self.lock():
             path = self.path(identifier)
             old = path.read_bytes()
+            if self._is_management_config(self.parse(path)):
+                raise OperationError('Нельзя редактировать конфигурацию панели. Измените сертификат в настройках.')
             if revision(old) != expected_revision:
                 raise OperationError('Файл уже изменён. Откройте его заново перед сохранением.')
             self.backup(identifier, old)
@@ -274,6 +278,8 @@ class NginxManager:
             current = path.read_bytes()
             if revision(current) != expected_revision:
                 raise OperationError('Конфигурация изменилась. Обновите список.')
+            if self._is_management_config(self.parse(path)):
+                raise OperationError('Нельзя переключать конфигурацию, через которую открыта эта панель.')
             stored = self.maintenance_backup(identifier)
             if is_maintenance_config(current):
                 if not enabled:

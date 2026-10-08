@@ -14,9 +14,15 @@ if __name__ == '__main__':
     if settings.SNC_MODE == 'demo' and host not in {'127.0.0.1', '::1', 'localhost'}:
         raise RuntimeError('Demo with a temporary password must bind to loopback only.')
     stop, lock = start_collector()
-    print(f'SmallnGinxControl [{settings.SNC_MODE}] http://{host}:{port}', flush=True)
+    print(f'SmallnGinxControl [{settings.SNC_MODE}] backend http://{host}:{port}', flush=True)
     try:
-        serve(application, host=host, port=port, threads=6, channel_timeout=30, max_request_body_size=512 * 1024, clear_untrusted_proxy_headers=True)
+        proxy_settings = {}
+        if settings.SNC_MODE == 'local' and os.environ.get('SNC_TRUST_PROXY', '0') == '1':
+            proxy_settings = {
+                'trusted_proxy': '127.0.0.1',
+                'trusted_proxy_headers': {'x-forwarded-for', 'x-forwarded-proto'},
+            }
+        serve(application, host=host, port=port, threads=6, channel_timeout=30, max_request_body_size=512 * 1024, clear_untrusted_proxy_headers=True, **proxy_settings)
     finally:
         stop.set()
         lock.release()

@@ -375,8 +375,11 @@ test('switching server clears previous SSD usage while new metrics load', async 
 test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
-  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(5);
-  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'TOP-5 по трафику']);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(6);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'TOP-5 по трафику', 'HTTPS панели']);
+  await expect(page.locator('#panel-tls-status')).toHaveText('Только production');
+  await expect(page.locator('#panel-tls-renew')).toBeDisabled();
+  await expect(page.locator('#panel-tls-download')).toBeDisabled();
   await expect(page.locator('#traffic-maintenance-status')).toHaveText('Работает');
   await expect(page.locator('#traffic-maintenance-path')).toHaveText('/var/www/html/maitenance.html');
   await expect(page.locator('#traffic-maintenance-toggle')).toBeDisabled();

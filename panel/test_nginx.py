@@ -45,6 +45,20 @@ class NginxTests(SimpleTestCase):
         self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
         self.assertFalse(self.manager.maintenance_backup(item['id']).exists())
 
+    def test_management_proxy_cannot_be_edited_disabled_or_deleted(self):
+        with override_settings(SNC_SERVER='192.0.2.15', SNC_PORT=7445):
+            self.manager.create({'name': 'panel-control.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:7445', 'port': 7444})
+            identifier = self.manager.inventory()['items'][0]['id'] if self.manager.inventory()['items'] else 'conf.d/panel-control.test.conf'
+            self.assertNotIn(identifier, [item['id'] for item in self.manager.inventory()['items']])
+            config = self.manager.read(identifier)
+
+            with self.assertRaisesRegex(OperationError, 'Нельзя редактировать конфигурацию панели'):
+                self.manager.save(identifier, config['content'], config['revision'])
+            with self.assertRaisesRegex(OperationError, 'Нельзя переключать конфигурацию'):
+                self.manager.toggle(identifier, False, config['revision'])
+            with self.assertRaisesRegex(OperationError, 'не является управляемым'):
+                self.manager.delete(identifier, config['revision'])
+
     def test_inventory_names_real_domain_before_default_catchall(self):
         item = describe_configuration(
             [
@@ -141,14 +155,11 @@ class NginxTests(SimpleTestCase):
         self.assertFalse(link.exists())
         self.assertEqual(self.manager.inventory()['items'], [])
 
-    def test_delete_protects_control_panel_upstream(self):
+    def test_inventory_hides_control_panel_upstream(self):
         config = self.manager.root / 'conf.d' / 'panel-proxy.conf'
         config.write_text('server { listen 443 ssl; server_name panel.test; location / { proxy_pass http://127.0.0.1:7444; } }\n')
-        item = self.manager.inventory()['items'][0]
 
-        with self.assertRaisesRegex(OperationError, 'Нельзя удалить конфигурацию'):
-            self.manager.delete(item['id'], item['revision'])
-
+        self.assertEqual(self.manager.inventory()['items'], [])
         self.assertTrue(config.is_file())
 
     def test_delete_maintenance_proxy_clears_saved_original(self):

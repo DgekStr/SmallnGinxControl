@@ -10,7 +10,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.db import transaction
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -19,6 +19,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .metrics import snapshot
 from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting, TwoFactorCredential
+from .panel_tls import MAX_PEM_BYTES, panel_certificate_path, panel_tls_status, renew_panel_certificate, replace_panel_certificate
 from .servers import AddressForm, ServerForm, initialize_demo, manager_for, public_server, selected_server
 from .transactions import ACCESS_LOG_SAMPLE_MAX_BYTES, OperationError
 from .two_factor import generate_totp_secret, provisioning_uri, qr_data_uri, verify_totp
@@ -182,7 +183,7 @@ def api(request, resource):
     try:
         if resource == 'servers' and request.method == 'GET':
             return JsonResponse({'servers': [public_server(item) for item in Server.objects.all()]})
-        if resource not in {'servers', 'password', 'settings', 'two-factor'}:
+        if resource not in {'servers', 'password', 'settings', 'two-factor', 'panel-tls', 'panel-tls-download'}:
             server = selected_server(request.GET.get('server'))
             expected_profile = request.GET.get('server_revision')
             if (expected_profile is not None or request.method == 'POST') and expected_profile != server.updated_at.isoformat():
@@ -197,6 +198,10 @@ def api(request, resource):
             if resource == 'settings':
                 service_settings = ServiceSetting.get_solo()
                 return JsonResponse({'log_retention_days': service_settings.log_retention_days, 'session_timeout_hours': service_settings.session_timeout_hours, 'access_log_sample_bytes': service_settings.access_log_sample_bytes})
+            if resource == 'panel-tls':
+                return JsonResponse(panel_tls_status())
+            if resource == 'panel-tls-download':
+                return FileResponse(panel_certificate_path().open('rb'), as_attachment=True, filename='smallnginxcontrol-certificate.pem', content_type='application/x-pem-file')
             if resource == 'overview':
                 return JsonResponse({'server': server.host, 'server_id': server.pk, 'server_name': server.name, 'mode': server.mode, 'nginx': manager.status(), 'metrics': snapshot(server)})
             if resource == 'traffic':
@@ -211,6 +216,28 @@ def api(request, resource):
             if resource == 'audit':
                 return JsonResponse({'events': list(AuditEvent.objects.filter(Q(server=server) | Q(server__isnull=True))[:100].values('created_at', 'actor', 'action', 'target', 'success', 'detail', 'server_id'))})
             return JsonResponse({'error': 'Неизвестный ресурс.'}, status=404)
+        if resource == 'panel-tls':
+            action = 'panel_tls_' + ('replace' if request.content_type == 'multipart/form-data' else 'renew')
+            target = settings.SNC_SERVER
+            if request.content_type == 'multipart/form-data':
+                certificate = request.FILES.get('certificate')
+                private_key = request.FILES.get('private_key')
+                if certificate is None or private_key is None:
+                    raise OperationError('Загрузите сертификат и приватный ключ в PEM.')
+                if certificate.size > MAX_PEM_BYTES or private_key.size > MAX_PEM_BYTES:
+                    raise OperationError('Каждый PEM-файл должен быть не больше 200 КБ.')
+                result = replace_panel_certificate(certificate.read(), private_key.read())
+                message = 'Сертификат панели заменён.'
+            elif request.content_type == 'application/json':
+                data = json.loads(request.body)
+                if not isinstance(data, dict) or data.get('action') != 'renew':
+                    raise OperationError('Неизвестное действие сертификата.')
+                result = renew_panel_certificate()
+                message = 'Self-signed сертификат панели перевыпущен.'
+            else:
+                return JsonResponse({'error': 'Ожидается JSON или PEM upload.'}, status=415)
+            record(request, action, target)
+            return JsonResponse({'ok': True, 'message': message, 'certificate': result})
         if request.content_type != 'application/json':
             return JsonResponse({'error': 'Ожидается JSON.'}, status=415)
         data = json.loads(request.body)
@@ -342,7 +369,7 @@ def api(request, resource):
             return JsonResponse({'error': 'Неизвестный ресурс.'}, status=404)
         record(request, 'two_factor_' + action if resource == 'two-factor' else action, target, server=server)
         return JsonResponse(result if isinstance(result, dict) else {'ok': True, 'message': result})
-    except (OperationError, ValueError, TypeError, AttributeError, OSError, portalocker.exceptions.LockException) as error:
+    except (OperationError, ValueError, TypeError, AttributeError, OSError, UnicodeError, portalocker.exceptions.LockException) as error:
         if request.method == 'POST':
             record(request, str(action), target, False, str(error), server)
         return JsonResponse({'error': str(error)}, status=400)

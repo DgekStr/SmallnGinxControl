@@ -24,7 +24,7 @@ const titles = {
 function icons() { lucide.createIcons(); }
 
 async function request(resource, data, parameters = {}) {
-  const scoped = !['servers', 'password', 'settings', 'two-factor'].includes(resource);
+  const scoped = !['servers', 'password', 'settings', 'two-factor', 'panel-tls', 'panel-tls-download'].includes(resource);
   const generation = state.generation;
   const search = new URLSearchParams(parameters);
   if (scoped) search.set('server', state.serverId);
@@ -33,9 +33,13 @@ async function request(resource, data, parameters = {}) {
   const options = {headers: {'Accept': 'application/json'}, credentials: 'same-origin', signal: AbortSignal.timeout(100000)};
   if (data !== undefined) {
     options.method = 'POST';
-    options.headers['Content-Type'] = 'application/json';
     options.headers['X-CSRFToken'] = decodeURIComponent(document.cookie.split('; ').find((value) => value.startsWith('csrftoken='))?.split('=')[1] || '');
-    options.body = JSON.stringify(data);
+    if (data instanceof FormData) {
+      options.body = data;
+    } else {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(data);
+    }
   }
   const response = await fetch(`/api/${resource}/?${search}`, options).catch((error) => {
     if (scoped && generation !== state.generation) error.stale = true;
@@ -377,6 +381,55 @@ async function refreshSessionTimeoutSettings() {
   query('#session-timeout-result').hidden = true;
 }
 
+function ensurePanelTlsSettings() {
+  if (query('#panel-tls-status')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section panel-tls-section';
+  section.innerHTML = '<div class="section-heading"><h2>HTTPS панели</h2><i data-lucide="shield-check" class="text-cyan"></i></div><dl class="settings-details"><div><dt>Статус</dt><dd id="panel-tls-status">Загрузка</dd></div><div><dt>Срок действия</dt><dd id="panel-tls-expiry">—</dd></div><div><dt>SAN</dt><dd id="panel-tls-sans">—</dd></div><div><dt>SHA-256</dt><dd class="mono" id="panel-tls-fingerprint">—</dd></div></dl><p class="muted small">Локальный self-signed сертификат не доверен браузером автоматически. Импортируйте скачанный сертификат на клиентских устройствах или замените его сертификатом доверенного CA.</p><div id="panel-tls-result" class="operation-result" hidden></div><div class="panel-tls-actions"><button class="button danger" type="button" id="panel-tls-renew"><i data-lucide="refresh-cw"></i>Перевыпустить</button><button class="button" type="button" id="panel-tls-download" disabled><i data-lucide="download"></i>Скачать сертификат</button></div><form id="panel-tls-upload-form"><label>Сертификат PEM<input name="certificate" type="file" accept=".pem,.crt,application/x-pem-file" required></label><label>Приватный ключ PEM<input name="private_key" type="file" accept=".pem,.key,application/x-pem-file" required></label><p class="muted small">Ключ должен соответствовать сертификату и содержать адрес панели в SAN. Файл ключа останется только на этом сервере.</p><button class="button primary" type="submit"><i data-lucide="upload"></i>Заменить сертификат</button></form>';
+  query('#view-settings .settings-layout').append(section);
+  query('#panel-tls-renew').addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+    if (!await confirmAction('Перевыпустить сертификат?', 'Будет создан новый локальный сертификат. Его потребуется заново доверить на клиентских устройствах.', true)) return;
+    const result = await request('panel-tls', {action: 'renew'});
+    showResult('#panel-tls-result', result.message, true);
+    renderPanelTlsStatus(result.certificate);
+  }, '#panel-tls-result'));
+  query('#panel-tls-download').addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+    window.location.assign('/api/panel-tls-download/');
+  }));
+  query('#panel-tls-upload-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    runAction(event.submitter, async () => {
+      if (!await confirmAction('Заменить сертификат панели?', 'Текущий HTTPS-сертификат будет заменён после проверки nginx.', true)) return;
+      const form = new FormData(formElement);
+      const result = await request('panel-tls', form);
+      formElement.reset();
+      showResult('#panel-tls-result', result.message, true);
+      renderPanelTlsStatus(result.certificate);
+    }, '#panel-tls-result');
+  });
+  icons();
+}
+
+function renderPanelTlsStatus(result) {
+  const available = result.available !== false;
+  const installed = Boolean(result.installed);
+  query('#panel-tls-status').textContent = installed ? (result.self_signed ? 'Self-signed' : 'Установлен') : available ? (result.error || 'Не установлен') : 'Только production';
+  query('#panel-tls-expiry').textContent = result.not_after ? new Date(result.not_after).toLocaleDateString('ru-RU') : '—';
+  query('#panel-tls-sans').textContent = result.sans?.join(', ') || '—';
+  query('#panel-tls-fingerprint').textContent = result.fingerprint || '—';
+  query('#panel-tls-renew').disabled = !available;
+  query('#panel-tls-download').disabled = !available || !installed;
+  query('#panel-tls-upload-form').querySelectorAll('input,button').forEach((element) => { element.disabled = !available; });
+}
+
+async function refreshPanelTlsSettings() {
+  ensurePanelTlsSettings();
+  const result = await request('panel-tls');
+  renderPanelTlsStatus(result);
+  query('#panel-tls-result').hidden = true;
+}
+
 function ensureTwoFactorSettings() {
   if (query('#two-factor-toggle')) return;
   const layout = query('#view-settings .settings-layout');
@@ -558,8 +611,9 @@ async function route() {
       await refreshLogRetentionSettings();
       await refreshAccessLogSampleSettings();
       await refreshTrafficMaintenanceSettings();
+      await refreshPanelTlsSettings();
       const layout = query('#view-settings .settings-layout');
-      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.access-log-sample-section'));
+      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.access-log-sample-section'), query('.panel-tls-section'));
     }
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }
@@ -615,7 +669,7 @@ async function loadConfig() {
 
 async function loadAudit() {
   const response = await request('audit');
-  const names = {login: 'Вход', logout: 'Выход', password_change: 'Смена пароля', settings_update: 'Срок хранения логов', save_config: 'Изменение конфигурации', create: 'Создание хоста', toggle: 'Переключение хоста', reload: 'Применение nginx', restart: 'Перезапуск nginx', test: 'Проверка nginx', demo_initialized: 'Инициализация демо'};
+  const names = {login: 'Вход', logout: 'Выход', password_change: 'Смена пароля', settings_update: 'Изменение настроек', panel_tls_renew: 'Перевыпуск TLS-сертификата', panel_tls_replace: 'Замена TLS-сертификата', save_config: 'Изменение конфигурации', create: 'Создание хоста', toggle: 'Переключение хоста', reload: 'Применение nginx', restart: 'Перезапуск nginx', test: 'Проверка nginx', demo_initialized: 'Инициализация демо'};
   Object.assign(names, {server_create: 'Добавление сервера', server_update: 'Изменение сервера', server_delete: 'Удаление подключения', server_test: 'Проверка соединения'});
   query('#audit-table').innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>ВРЕМЯ</th><th>ПОЛЬЗОВАТЕЛЬ</th><th>ОПЕРАЦИЯ</th><th>ОБЪЕКТ</th><th>РЕЗУЛЬТАТ</th></tr></thead><tbody>${response.events.map((event) => `<tr><td class="mono muted">${escapeHtml(new Date(event.created_at).toLocaleString('ru-RU'))}</td><td>${escapeHtml(event.actor)}</td><td class="audit-action">${escapeHtml(names[event.action] || event.action)}</td><td class="audit-target" title="${escapeHtml(event.target)}">${escapeHtml(event.target || '—')}${event.detail ? `<div class="audit-detail">${escapeHtml(event.detail)}</div>` : ''}</td><td><span class="badge ${event.success ? 'success' : 'error'}">${event.success ? 'Выполнено' : 'Ошибка'}</span></td></tr>`).join('') || '<tr><td colspan="5" class="empty-state">История пуста.</td></tr>'}</tbody></table></div>`;
 }

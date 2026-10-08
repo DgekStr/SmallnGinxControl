@@ -14,6 +14,8 @@ SERVICE_FILE=/etc/systemd/system/smallnginxcontrol.service
 CLEANUP_SERVICE_FILE=/etc/systemd/system/smallnginxcontrol-log-cleanup.service
 CLEANUP_TIMER_FILE=/etc/systemd/system/smallnginxcontrol-log-cleanup.timer
 STATE_DIR=/var/lib/smallnginxcontrol
+PANEL_TLS_CONFIG_FILE=/etc/nginx/conf.d/smallnginxcontrol-panel.conf
+PANEL_TLS_CONFIG_CREATED=0
 
 if [[ ! $INSTALL_DIR =~ ^/[A-Za-z0-9_./-]+$ || $INSTALL_DIR == / || $INSTALL_DIR == *..* ]]; then
     echo 'SNC_INSTALL_DIR must be a simple absolute path without spaces or parent references.' >&2
@@ -26,6 +28,12 @@ fi
 for command in git python3 systemctl; do
     command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 1; }
 done
+if ! command -v nginx >/dev/null; then
+    command -v apt-get >/dev/null || { echo 'nginx is required; install it before running this installer.' >&2; exit 1; }
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx
+fi
+systemctl enable --now nginx
 
 INSTALL_STARTED=0
 cleanup_failed_install() {
@@ -35,6 +43,10 @@ cleanup_failed_install() {
         echo 'Installation failed; removing generated service configuration. State data was preserved.' >&2
         systemctl disable --now smallnginxcontrol >/dev/null 2>&1 || true
         systemctl disable --now smallnginxcontrol-log-cleanup.timer >/dev/null 2>&1 || true
+        if (( PANEL_TLS_CONFIG_CREATED )); then
+            rm -f "$PANEL_TLS_CONFIG_FILE"
+            systemctl reload nginx >/dev/null 2>&1 || true
+        fi
         rm -f "$SERVICE_FILE" "$CLEANUP_SERVICE_FILE" "$CLEANUP_TIMER_FILE" "$ENV_FILE"
         systemctl daemon-reload >/dev/null 2>&1 || true
     fi
@@ -98,12 +110,12 @@ SNC_CERTBOT_LIVE_ROOT=/etc/letsencrypt/live
 SNC_NGINX_BIN=/usr/sbin/nginx
 SNC_SERVER=$PANEL_HOST
 SNC_BIND=127.0.0.1
-SNC_PORT=7444
+SNC_PORT=7445
 SNC_ALLOWED_HOSTS=127.0.0.1,localhost,$PANEL_HOST
 SNC_INTERFACE=
-SNC_CSRF_ORIGINS=
-SNC_TRUST_PROXY=0
-SNC_SECURE_COOKIES=0
+SNC_CSRF_ORIGINS=https://$PANEL_HOST:7444,https://localhost:7444
+SNC_TRUST_PROXY=1
+SNC_SECURE_COOKIES=1
 ENV
 chmod 0600 "$ENV_FILE"
 
@@ -144,6 +156,11 @@ unset SNC_INITIAL_PASSWORD
 "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/manage.py" collectstatic --noinput
 "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/manage.py" check
 
+if [[ ! -e $PANEL_TLS_CONFIG_FILE ]]; then
+    PANEL_TLS_CONFIG_CREATED=1
+fi
+"$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/manage.py" shell -c 'from panel.panel_tls import install_panel_tls; install_panel_tls()'
+
 systemctl daemon-reload
 systemctl enable --now smallnginxcontrol
 systemctl enable --now smallnginxcontrol-log-cleanup.timer
@@ -151,4 +168,4 @@ systemctl --no-pager --full status smallnginxcontrol
 
 printf '\nInstalled %s (%s).\n' "$INSTALL_DIR" "$RELEASE_TAG"
 printf 'Open a local SSH tunnel with: ssh -N -L 7444:127.0.0.1:7444 root@%s\n' "$PANEL_HOST"
-printf 'Then visit http://127.0.0.1:7444. Do not expose the loopback HTTP upstream directly.\n'
+printf 'Then visit https://localhost:7444 or https://%s:7444. Import the downloaded certificate on clients to trust it.\n' "$PANEL_HOST"
