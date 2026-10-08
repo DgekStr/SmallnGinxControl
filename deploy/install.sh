@@ -39,6 +39,7 @@ else
 fi
 
 read -r -p 'IP address or DNS name used to open the panel: ' PANEL_HOST
+PANEL_HOST=${PANEL_HOST%$'\r'}
 if [[ ! $PANEL_HOST =~ ^[A-Za-z0-9.-]+$ ]]; then
     echo 'Enter a plain IPv4 address or DNS name, without scheme or port.' >&2
     exit 1
