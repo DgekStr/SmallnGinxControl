@@ -56,6 +56,20 @@ test('overview renders assets, metrics and responsive layouts', async ({page}) =
   expect(errors).toEqual([]);
 });
 
+test('about page is the bottom service menu entry and explains license and billing', async ({page}) => {
+  await login(page);
+  await expect(page.locator('.sidebar-bottom [data-view="about"]')).toBeVisible();
+  await page.locator('.sidebar-bottom [data-view="about"]').click();
+  await expect(page.locator('#page-title')).toHaveText('О программе');
+  await expect(page.locator('#view-about')).toContainText('1.0.3');
+  await expect(page.locator('#view-about')).toContainText('распространяется бесплатно');
+  await expect(page.locator('#view-about')).toContainText('клиентский биллинг');
+  await expect(page.locator('#view-about a[href="https://github.com/DgekStr/SmallnGinxControl"]')).toBeVisible();
+  await expect(page.locator('#about-description')).toHaveAttribute('href', 'https://github.com/DgekStr/SmallnGinxControl/blob/main/doc/help.md');
+  await expect(page.locator('#view-about a[href$="/LICENSE"]')).toBeVisible();
+  await expect(page.locator('#view-about a[href="https://github.com/DgekStr"]')).toHaveText('DgekStr');
+});
+
 test('proxy creation, toggles, config validation and logs', async ({page}) => {
   await login(page);
   await page.locator('[data-view="proxies"]').click();

@@ -19,6 +19,7 @@ const titles = {
   config: ['Конфигурация nginx', 'NGINX / CONFIGURATION', 'Конфигурация'],
   audit: ['История действий', 'NGINX / AUDIT TRAIL', 'История действий'],
   settings: ['Настройки', 'SMALLNGINXCONTROL / SETTINGS', 'Настройки'],
+  about: ['О программе', 'SMALLNGINXCONTROL / ABOUT', 'О программе'],
 };
 
 function icons() { lucide.createIcons(); }
