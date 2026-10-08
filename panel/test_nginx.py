@@ -74,6 +74,19 @@ class NginxTests(SimpleTestCase):
         self.assertEqual(item['name'], 'mail.focuslens.dev')
         self.assertEqual(item['domains'], ['_', 'mail.focuslens.dev'])
 
+    def test_inventory_exposes_tls_certificate_details(self):
+        certificate = {'subject': 'CN=secure.example.test', 'issuer': 'CN=Example CA', 'days_remaining': 12}
+        item = describe_configuration(
+            [{'directive': 'server', 'args': [], 'block': [
+                {'directive': 'listen', 'args': ['443', 'ssl']},
+                {'directive': 'server_name', 'args': ['secure.example.test']},
+            ]}],
+            'conf.d/secure.example.test.conf', 'revision', True, True, certificate_days=12, certificate=certificate,
+        )
+        self.assertTrue(item['tls'])
+        self.assertEqual(item['certificate_days'], 12)
+        self.assertEqual(item['certificate'], certificate)
+
     def test_duplicate_domain_error_identifies_hidden_catchall_config(self):
         config = self.manager.root / 'sites-available' / 'default_catchall'
         config.write_text('server { listen 80 default_server; server_name _; }\nserver { listen 80; server_name mail.focuslens.dev; }\n')

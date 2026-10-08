@@ -119,7 +119,7 @@ class SSHManager:
         for config in result['configs']:
             try:
                 nodes = self.parser.syntax(config['content'])
-                item = describe_configuration(nodes, config['id'], config['revision'], config['enabled'], config['toggleable'], config.get('maintenance', False), config.get('certificate_days'))
+                item = describe_configuration(nodes, config['id'], config['revision'], config['enabled'], config['toggleable'], config.get('maintenance', False), config.get('certificate_days'), config.get('certificate'))
                 if item:
                     items.append(item)
             except OperationError as error:

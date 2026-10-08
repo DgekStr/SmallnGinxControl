@@ -13,7 +13,7 @@ from django.conf import settings
 
 from .transactions import (
     ACCESS_LOG_SAMPLE_DEFAULT_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
-    certificate_days_remaining, configure_host_access_logs, delete_config_transaction,
+    certificate_details, configure_host_access_logs, delete_config_transaction,
     ensure_traffic_log_format, issue_webroot_certificate, set_global_traffic_block as apply_global_traffic_block,
     validate_certificate_request, validate_maintenance_page_path,
     has_proxy_server, is_allowed_log_path,
@@ -38,7 +38,7 @@ def revision(content):
     return hashlib.sha256(content).hexdigest()
 
 
-def describe_configuration(nodes, identifier, content_revision, enabled, toggleable, maintenance=False, certificate_days=None):
+def describe_configuration(nodes, identifier, content_revision, enabled, toggleable, maintenance=False, certificate_days=None, certificate=None):
     directives = list(walk(nodes))
     servers = sum(node['directive'] == 'server' and 'block' in node for node in directives)
     if not servers:
@@ -53,7 +53,8 @@ def describe_configuration(nodes, identifier, content_revision, enabled, togglea
         'target': ', '.join(dict.fromkeys(upstreams or roots)) or 'Конфигурация сервера',
         'listen': ', '.join(dict.fromkeys(listens)) or '80',
         'tls': any('ssl' in node['args'] for node in directives if node['directive'] == 'listen'),
-        'enabled': enabled, 'maintenance': maintenance, 'certificate_days': certificate_days, 'servers': servers, 'toggleable': toggleable, 'revision': content_revision,
+        'enabled': enabled, 'maintenance': maintenance, 'certificate_days': certificate_days, 'certificate': certificate,
+        'servers': servers, 'toggleable': toggleable, 'revision': content_revision,
     }
 
 
@@ -189,8 +190,10 @@ class NginxManager:
                 if maintenance:
                     enabled = False
                 certificates = [node['args'][0] for node in walk(nodes) if node['directive'] == 'ssl_certificate' and node['args']]
-                certificate_days = certificate_days_remaining(certificates) if any('ssl' in node['args'] for node in walk(nodes) if node['directive'] == 'listen') else None
-                item = describe_configuration(nodes, identifier, revision(content), enabled, standard_site or standard_conf, maintenance, certificate_days)
+                is_tls = any('ssl' in node['args'] for node in walk(nodes) if node['directive'] == 'listen')
+                certificate = certificate_details(certificates) if is_tls else None
+                certificate_days = certificate['days_remaining'] if certificate else None
+                item = describe_configuration(nodes, identifier, revision(content), enabled, standard_site or standard_conf, maintenance, certificate_days, certificate)
                 if item:
                     items.append(item)
             except (OperationError, OSError, UnicodeError) as error:

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from panel.transactions import ACCESS_LOG_SAMPLE_MAX_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write, certificate_days_remaining, configure_host_access_logs, ensure_global_maintenance_include, ensure_traffic_log_format, issue_webroot_certificate, render_global_maintenance_snippet, set_global_traffic_block, validate_certificate_request
+from panel.transactions import ACCESS_LOG_SAMPLE_MAX_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write, certificate_days_remaining, certificate_details, configure_host_access_logs, ensure_global_maintenance_include, ensure_traffic_log_format, issue_webroot_certificate, render_global_maintenance_snippet, set_global_traffic_block, validate_certificate_request
 
 
 class TransactionTests(unittest.TestCase):
@@ -221,6 +221,25 @@ class TransactionTests(unittest.TestCase):
             with patch('panel.transactions.subprocess.run', side_effect=responses):
                 remaining = certificate_days_remaining([str(first), str(second)], datetime(2026, 10, 4, tzinfo=timezone.utc))
             self.assertEqual(remaining, 10)
+
+    def test_certificate_details_returns_public_identity_and_validity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            certificate = Path(directory) / 'fullchain.pem'
+            certificate.write_text('certificate')
+            response = Mock(
+                returncode=0,
+                stdout='subject=CN=secure.example.com,O=Example\nissuer=CN=Example CA\nserial=01AB\nnotBefore=Oct 04 00:00:00 2026 GMT\nnotAfter=Oct 20 00:00:00 2026 GMT\n',
+                stderr='',
+            )
+            with patch('panel.transactions.subprocess.run', return_value=response):
+                details = certificate_details([str(certificate)], datetime(2026, 10, 4, tzinfo=timezone.utc))
+            self.assertEqual(details['file'], str(certificate.resolve()))
+            self.assertEqual(details['subject'], 'CN=secure.example.com,O=Example')
+            self.assertEqual(details['issuer'], 'CN=Example CA')
+            self.assertEqual(details['serial'], '01AB')
+            self.assertEqual(details['valid_from'], '2026-10-04T00:00:00+00:00')
+            self.assertEqual(details['valid_until'], '2026-10-20T00:00:00+00:00')
+            self.assertEqual(details['days_remaining'], 16)
 
     def test_certificate_request_requires_public_dns_and_valid_contact(self):
         self.assertEqual(validate_certificate_request('app.example.com', 'ops@example.com'), ('app.example.com', 'ops@example.com'))

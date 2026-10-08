@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 if __package__:
     from .transactions import (
         ACCESS_LOG_SAMPLE_DEFAULT_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
-        certificate_days_remaining, issue_webroot_certificate, validate_certificate_request,
+        certificate_details, issue_webroot_certificate, validate_certificate_request,
         delete_config_transaction, ensure_traffic_log_format, has_proxy_server, is_allowed_log_path,
         is_maintenance_config, maintenance_backup_path, render_maintenance_config,
         set_global_traffic_block, validate_maintenance_page_path,
@@ -108,8 +108,9 @@ class RemoteWorker:
                 maintenance = is_maintenance_config(config['content'])
                 certificate_matches = re.findall(r'(?m)^\s*ssl_certificate\s+(?:"([^"]+)"|\'([^\']+)\'|([^;\s]+))', config['content'])
                 certificate_paths = [value for match in certificate_matches for value in match if value]
-                certificate_days = certificate_days_remaining(certificate_paths) if re.search(r'(?m)^\s*listen\s+[^;]*\bssl\b', config['content']) else None
-                configs.append({**config, 'enabled': path in active and not maintenance, 'maintenance': maintenance, 'certificate_days': certificate_days, 'toggleable': path.parent in [self.root / 'conf.d', self.root / 'sites-available']})
+                is_tls = bool(re.search(r'(?m)^\s*listen\s+[^;]*\bssl\b', config['content']))
+                certificate = certificate_details(certificate_paths) if is_tls else None
+                configs.append({**config, 'enabled': path in active and not maintenance, 'maintenance': maintenance, 'certificate_days': certificate['days_remaining'] if certificate else None, 'certificate': certificate, 'toggleable': path.parent in [self.root / 'conf.d', self.root / 'sites-available']})
             except (OSError, UnicodeError, OperationError) as error:
                 warnings.append(identifier + ': ' + str(error))
         return {'configs': configs, 'warnings': warnings}

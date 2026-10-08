@@ -128,6 +128,43 @@ function hostHref(item) {
   return `${protocol}://${hostname}${port === defaultPort ? '' : `:${port}`}/`;
 }
 
+function formatCertificateDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : `${date.toLocaleString('ru-RU', {dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC'})} UTC`;
+}
+
+function openCertificateDialog(item) {
+  let dialog = query('#certificate-dialog');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'certificate-dialog';
+    dialog.className = 'modal certificate-modal';
+    dialog.setAttribute('aria-labelledby', 'certificate-title');
+    dialog.innerHTML = '<div class="modal-heading"><div><span class="eyebrow">TLS / X.509</span><h2 id="certificate-title"></h2></div><button class="icon-button" type="button" data-close="certificate-dialog" title="Закрыть" aria-label="Закрыть"><i data-lucide="x"></i></button></div><p id="certificate-validity" class="certificate-validity" role="status"></p><dl class="certificate-details"><div><dt>Хост</dt><dd id="certificate-host"></dd></div><div><dt>Субъект</dt><dd id="certificate-subject"></dd></div><div><dt>Издатель</dt><dd id="certificate-issuer"></dd></div><div><dt>Серийный номер</dt><dd id="certificate-serial"></dd></div><div><dt>Действует с</dt><dd id="certificate-valid-from"></dd></div><div><dt>Действует до</dt><dd id="certificate-valid-until"></dd></div><div><dt>Файл</dt><dd id="certificate-file"></dd></div></dl><div class="modal-footer"><button class="button" type="button" data-close="certificate-dialog">Закрыть</button></div>';
+    document.body.append(dialog);
+    icons();
+  }
+  const certificate = item.certificate && typeof item.certificate === 'object' ? item.certificate : null;
+  const days = Number.isInteger(certificate?.days_remaining) ? certificate.days_remaining : Number.isInteger(item.certificate_days) ? item.certificate_days : null;
+  query('#certificate-title').textContent = `TLS-сертификат · ${item.name}`;
+  query('#certificate-host').textContent = item.name || '—';
+  query('#certificate-subject').textContent = certificate?.subject || '—';
+  query('#certificate-issuer').textContent = certificate?.issuer || '—';
+  query('#certificate-serial').textContent = certificate?.serial || '—';
+  query('#certificate-valid-from').textContent = certificate?.valid_from ? formatCertificateDate(certificate.valid_from) : '—';
+  query('#certificate-valid-until').textContent = certificate?.valid_until ? formatCertificateDate(certificate.valid_until) : '—';
+  query('#certificate-file').textContent = certificate?.file || '—';
+  const validity = query('#certificate-validity');
+  validity.classList.toggle('expired', Number.isInteger(days) && days < 0);
+  validity.classList.toggle('warning', Number.isInteger(days) && days >= 0 && days <= 14);
+  validity.textContent = !certificate
+    ? 'Сведения о сертификате недоступны. Проверьте ssl_certificate и наличие файла на целевом сервере.'
+    : days === null ? 'Срок действия сертификата не удалось определить.'
+      : days < 0 ? `Сертификат просрочен на ${Math.abs(days)} дн.`
+        : days === 0 ? 'Сертификат истекает сегодня.' : `Действителен, осталось ${days} дн.`;
+  dialog.showModal();
+}
+
 function hostTable(items) {
   if (!items.length) return `<div class="empty-state">${icon('folder-search')}<strong>Конфигурации не найдены</strong><span>Нет хостов, соответствующих выбранному фильтру.</span></div>`;
   const rows = items.map((item) => {
@@ -137,6 +174,9 @@ function hostTable(items) {
     const deleteButton = item.toggleable ? `<button class="icon-button danger" data-action="delete" aria-label="Удалить ${escapeHtml(item.name)}" title="Удалить конфигурацию из nginx">${icon('trash-2')}</button>` : '';
     const expiryDays = item.tls && Number.isInteger(item.certificate_days) ? item.certificate_days : null;
     const expiry = expiryDays === null ? '' : `<span class="certificate-expiry ${expiryDays < 0 ? 'expired' : expiryDays <= 14 ? 'warning' : ''}" title="${expiryDays < 0 ? 'Сертификат просрочен' : 'Осталось дней действия сертификата'}">${expiryDays < 0 ? `Просрочен ${Math.abs(expiryDays)} дн.` : expiryDays === 0 ? 'Истекает сегодня' : `${expiryDays} дн.`}</span>`;
+    const protocol = item.tls
+      ? `<button type="button" class="protocol secure protocol-button" data-action="certificate" aria-label="Сведения о сертификате ${escapeHtml(item.name)}" title="Показать сведения о TLS-сертификате">${icon('lock-keyhole')}HTTPS</button>`
+      : `<span class="protocol">${icon('globe')}HTTP</span>`;
     const domainExpiry = (item.domain_expiry || []).map((entry) => {
       if (!Number.isInteger(entry.days)) {
         const label = entry.status === 'checking' ? 'Проверяется…' : 'Срок неизвестен';
@@ -152,7 +192,7 @@ function hostTable(items) {
     const trafficCell = `<div class="host-traffic" title="${trafficTitle}"><span aria-label="Скачано">↓ ${traffic ? trafficSize(traffic.downloaded_bytes) : '—'}</span><span aria-label="Отправлено">↑ ${traffic ? uploaded : '—'}</span></div>`;
     const href = hostHref(item);
     const openLink = href ? `<a class="host-open-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="Открыть хост" aria-label="Открыть ${escapeHtml(item.name)}">🔗</a>` : '';
-    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span>${openLink}${domainExpiry}<span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td>${trafficCell}</td><td><div class="protocol-cell"><span class="protocol ${item.tls ? 'secure' : ''}">${icon(item.tls ? 'lock-keyhole' : 'globe')}${item.tls ? 'HTTPS' : 'HTTP'}</span>${expiry}</div></td><td><span class="badge ${item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${toggleTitle}" ${item.toggleable ? '' : 'disabled'}></button><button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
+    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span>${openLink}${domainExpiry}<span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td>${trafficCell}</td><td><div class="protocol-cell">${protocol}${expiry}</div></td><td><span class="badge ${item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${toggleTitle}" ${item.toggleable ? '' : 'disabled'}></button><button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
   }).join('');
   return `<div class="table-scroll"><table class="data-table"><thead><tr><th>ДОМЕН / КОНФИГУРАЦИЯ</th><th>НАЗНАЧЕНИЕ</th><th>ТРАФИК</th><th>ПРОТОКОЛ</th><th>СТАТУС</th><th>ДЕЙСТВИЯ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -713,6 +753,10 @@ document.addEventListener('click', async (event) => {
   if (!button || state.busy) return;
   const item = state.hosts.find((host) => host.id === button.closest('tr').dataset.id);
   if (!item) return;
+  if (button.dataset.action === 'certificate') {
+    openCertificateDialog(item);
+    return;
+  }
   await runAction(button, async () => {
     if (button.dataset.action === 'edit') return openEditor(item);
     if (button.dataset.action === 'logs') {

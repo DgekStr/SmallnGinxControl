@@ -188,24 +188,42 @@ def access_log_traffic_totals(candidates, roots, sample_size=ACCESS_LOG_SAMPLE_D
 
 
 @lru_cache(maxsize=512)
-def _certificate_expiry_timestamp(path, mtime_ns):
+def _certificate_file_details(path, mtime_ns):
     openssl = shutil.which('openssl') or '/usr/bin/openssl'
     try:
-        result = subprocess.run([openssl, 'x509', '-in', path, '-noout', '-enddate'], capture_output=True, text=True, timeout=5, check=False)
+        result = subprocess.run(
+            [openssl, 'x509', '-in', path, '-noout', '-subject', '-issuer', '-serial', '-startdate', '-enddate', '-nameopt', 'RFC2253'],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode:
         return None
-    match = re.search(r'notAfter=(.+)', result.stdout + result.stderr)
-    if not match:
+    fields = {'subject': None, 'issuer': None, 'serial': None, 'valid_from': None, 'valid_until': None}
+    time_fields = {'notBefore': 'valid_from', 'notAfter': 'valid_until'}
+    labels = {'subject': 'subject', 'issuer': 'issuer', 'serial': 'serial', **time_fields}
+    for line in (result.stdout + '\n' + result.stderr).splitlines():
+        match = re.match(r'^(subject|issuer|serial|notBefore|notAfter)=(.*)$', line.strip())
+        if not match:
+            continue
+        name, value = match.groups()
+        if name in time_fields:
+            try:
+                value = datetime.fromtimestamp(ssl.cert_time_to_seconds(value.strip()), timezone.utc).isoformat(timespec='seconds')
+            except (ValueError, OverflowError):
+                value = None
+        fields[labels[name]] = value
+    if not fields['valid_until']:
         return None
     try:
-        return ssl.cert_time_to_seconds(match.group(1).strip())
+        expires = ssl.cert_time_to_seconds(re.search(r'^notAfter=(.+)$', result.stdout + '\n' + result.stderr, re.MULTILINE).group(1).strip())
     except (ValueError, OverflowError):
         return None
+    fields['_expires_timestamp'] = expires
+    return fields
 
 
-def certificate_days_remaining(certificates, now=None):
+def certificate_details(certificates, now=None):
     now_timestamp = (now or datetime.now(timezone.utc)).timestamp()
     values = []
     for candidate in dict.fromkeys(certificates):
@@ -219,10 +237,21 @@ def certificate_days_remaining(certificates, now=None):
             metadata = resolved.stat()
         except (OSError, RuntimeError):
             continue
-        expires = _certificate_expiry_timestamp(str(resolved), metadata.st_mtime_ns)
-        if expires is not None:
-            values.append(math.ceil((expires - now_timestamp) / 86400))
-    return min(values) if values else None
+        details = _certificate_file_details(str(resolved), metadata.st_mtime_ns)
+        if details:
+            details['file'] = str(resolved)
+            values.append(details)
+    if not values:
+        return None
+    details = min(values, key=lambda value: value['_expires_timestamp']).copy()
+    expires = details.pop('_expires_timestamp')
+    details['days_remaining'] = math.ceil((expires - now_timestamp) / 86400)
+    return details
+
+
+def certificate_days_remaining(certificates, now=None):
+    details = certificate_details(certificates, now)
+    return details['days_remaining'] if details else None
 
 
 def is_maintenance_config(content):

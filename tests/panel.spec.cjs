@@ -140,6 +140,32 @@ test('certificate expiry is shown only for HTTPS hosts', async ({page}) => {
   await expect(http.locator('.certificate-expiry')).toHaveCount(0);
 });
 
+test('HTTPS lock opens certificate details and HTTP has no certificate action', async ({page}) => {
+  await login(page);
+  await page.locator('[data-view="hosts"]').click();
+  await page.evaluate(() => {
+    state.hosts = [
+      {id: 'conf.d/secure.example.com.conf', name: 'secure.example.com', domains: ['secure.example.com'], kind: 'host', target: '/var/www/secure', tls: true, certificate_days: 12, certificate: {subject: 'CN=secure.example.com', issuer: 'CN=Example CA', serial: '01AB', valid_from: '2026-10-04T00:00:00+00:00', valid_until: '2026-10-20T00:00:00+00:00', file: '/etc/letsencrypt/live/secure.example.com/fullchain.pem', days_remaining: 12}, enabled: true, toggleable: true, servers: 1},
+      {id: 'conf.d/plain.example.com.conf', name: 'plain.example.com', domains: ['plain.example.com'], kind: 'host', target: '/var/www/plain', tls: false, enabled: true, toggleable: true, servers: 1},
+    ];
+    state.view = 'hosts';
+    renderHosts();
+  });
+  const secure = page.locator('#hosts-table tbody tr').filter({hasText: 'secure.example.com'});
+  await secure.getByRole('button', {name: 'Сведения о сертификате secure.example.com'}).click();
+  const dialog = page.locator('#certificate-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('#certificate-title')).toHaveText('TLS-сертификат · secure.example.com');
+  await expect(dialog.locator('#certificate-subject')).toHaveText('CN=secure.example.com');
+  await expect(dialog.locator('#certificate-issuer')).toHaveText('CN=Example CA');
+  await expect(dialog.locator('#certificate-valid-from')).not.toHaveText('—');
+  await expect(dialog.locator('#certificate-valid-until')).not.toHaveText('—');
+  await expect(dialog.locator('#certificate-validity')).toHaveText('Действителен, осталось 12 дн.');
+  const plain = page.locator('#hosts-table tbody tr').filter({hasText: 'plain.example.com'});
+  await expect(plain.locator('.protocol-button')).toHaveCount(0);
+  await expect(plain.locator('.protocol')).toHaveText('HTTP');
+});
+
 test('domain registration expiry uses 30, 20 and 10 day warning thresholds', async ({page}) => {
   await login(page);
   const markup = await page.evaluate(() => hostTable([

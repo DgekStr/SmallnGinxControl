@@ -75,6 +75,23 @@ class ServerTests(TestCase):
             with self.assertRaises(OperationError):
                 worker.dispatch('shell', {'command': 'id'})
 
+    def test_remote_worker_inventory_includes_tls_certificate_details(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'conf.d').mkdir()
+            (root / 'nginx.conf').write_text('events {}\nhttp {}\n')
+            config_path = root / 'conf.d' / 'secure.example.test.conf'
+            config_path.write_text('server {\n    listen 443 ssl;\n    server_name secure.example.test;\n    ssl_certificate /etc/ssl/secure/fullchain.pem;\n}\n')
+            worker = RemoteWorker(root, root / 'logs', root / 'state')
+            nginx_dump = f'# configuration file {config_path}:\n' + config_path.read_text()
+            response = Mock(returncode=0, stdout=nginx_dump, stderr='')
+            certificate = {'subject': 'CN=secure.example.test', 'issuer': 'CN=Example CA', 'days_remaining': 12}
+            with patch.object(worker, 'command', return_value=response), patch('panel.remote_worker.certificate_details', return_value=certificate) as read_certificate:
+                inventory = worker.inventory()
+            self.assertEqual(inventory['configs'][0]['certificate'], certificate)
+            self.assertEqual(inventory['configs'][0]['certificate_days'], 12)
+            read_certificate.assert_called_once_with(['/etc/ssl/secure/fullchain.pem'])
+
     def test_remote_worker_new_host_registers_traffic_log_format(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
