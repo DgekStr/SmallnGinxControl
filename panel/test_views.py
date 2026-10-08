@@ -1,9 +1,9 @@
 from urllib.parse import urlencode
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 import pyotp
 
@@ -237,3 +237,43 @@ class PanelTlsApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         replace.assert_not_called()
+
+
+class DomainExpiryApiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('admin', password='12345', is_staff=True)
+        self.client.force_login(self.user)
+
+    def test_hosts_api_adds_cached_expiry_without_blocking_on_whois(self):
+        server = Server.objects.get(pk='local')
+        Server.objects.filter(pk=server.pk).update(mode='local')
+        item = {'id': 'conf.d/shop.conf', 'name': '*.www.dgek.ru', 'domains': ['*.www.dgek.ru'], 'kind': 'host'}
+        original_items = [item]
+        inventory = {'items': original_items, 'warnings': []}
+        enriched = {**item, 'domain_expiry': [{'domain': 'dgek.ru', 'status': 'ready', 'expires_on': '2026-10-17', 'days': 9}]}
+
+        with override_settings(SNC_MODE='local'), patch('panel.views.manager_for') as manager_for, patch('panel.views.enrich_inventory_domains', return_value=[enriched]) as enrich:
+            manager_for.return_value.inventory.return_value = inventory
+            response = self.client.get('/api/hosts/?server=local')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['items'][0]['domain_expiry'][0]['domain'], 'dgek.ru')
+        enrich.assert_called_once_with(original_items, check=True, force=False)
+
+    def test_demo_inventory_skips_whois_lookups(self):
+        server = Mock(mode='demo')
+        with override_settings(SNC_MODE='local'), patch('panel.views.selected_server', return_value=server), patch('panel.views.manager_for') as manager_for, patch('panel.views.enrich_inventory_domains', return_value=[]) as enrich:
+            manager_for.return_value.inventory.return_value = {'items': [], 'warnings': []}
+            response = self.client.get('/api/hosts/?server=demo')
+
+        self.assertEqual(response.status_code, 200)
+        enrich.assert_called_once_with([], check=False, force=False)
+
+    def test_ssh_inventory_can_force_domain_expiry_refresh_on_connection(self):
+        server = Mock(mode='ssh')
+        with override_settings(SNC_MODE='local'), patch('panel.views.selected_server', return_value=server), patch('panel.views.manager_for') as manager_for, patch('panel.views.enrich_inventory_domains', return_value=[]) as enrich:
+            manager_for.return_value.inventory.return_value = {'items': [], 'warnings': []}
+            response = self.client.get('/api/hosts/?server=remote&refresh_domains=1')
+
+        self.assertEqual(response.status_code, 200)
+        enrich.assert_called_once_with([], check=True, force=True)

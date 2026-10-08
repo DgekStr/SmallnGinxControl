@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080b14">
+  <title>Добро пожаловать · SmallnGinxControl</title>
+  <style>
+    @font-face{font-family:Manrope;src:url('/smallnginxcontrol-manrope-latin.woff2') format('woff2');font-weight:200 800;font-display:swap}
+    @font-face{font-family:Manrope;src:url('/smallnginxcontrol-manrope-cyrillic.woff2') format('woff2');font-weight:200 800;font-display:swap;unicode-range:U+0400-045F,U+0490-0491,U+04B0-04B1}
+    :root{color-scheme:dark;--bg:#080b14;--surface:#111624;--text:#eef1fa;--muted:#8993ab;--border:#252b3d;--cyan:#22d3ee;--green:#4dd7a3;font-family:Manrope,'Segoe UI',sans-serif;color:var(--text);background:var(--bg)}
+    *{box-sizing:border-box}body{min-height:100vh;margin:0;background:linear-gradient(120deg,#111624 0%,var(--bg) 62%,#101522 100%);font-size:15px;line-height:1.6}a{color:inherit;text-decoration:none}header,main,footer{width:min(1040px,calc(100% - 48px));margin-inline:auto}header{height:86px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}.brand{display:flex;align-items:center;gap:12px;font-size:14px;font-weight:700}.brand img{width:36px;height:36px;border:1px solid var(--border);border-radius:9px}.brand small{display:block;color:var(--muted);font-size:10px;font-weight:500}.status{display:flex;align-items:center;gap:8px;color:var(--green);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.status i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 12px #4dd7a355}main{min-height:calc(100vh - 156px);display:flex;align-items:center;padding:64px 0}.welcome{max-width:760px}.eyebrow{color:var(--cyan);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}h1{max-width:700px;margin:15px 0 20px;font-size:clamp(38px,6vw,68px);line-height:1.08;letter-spacing:-.035em}p{margin:0;color:var(--muted)}.lead{max-width:620px;font-size:16px;line-height:1.8}.actions{display:flex;flex-wrap:wrap;align-items:center;gap:18px;margin-top:30px}.primary{display:inline-flex;align-items:center;gap:10px;padding:11px 16px;border:1px solid #22d3ee66;border-radius:5px;background:#22d3ee;color:#06131b;font-size:12px;font-weight:800}.primary:hover{background:#70e9f7}.secondary{color:var(--cyan);font-size:12px}.notice{max-width:620px;margin-top:22px;padding-top:16px;border-top:1px solid var(--border);font-size:11px;line-height:1.75}footer{min-height:70px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--border);color:var(--muted);font-size:10px}footer a{color:var(--cyan)}@media(max-width:600px){header,main,footer{width:calc(100% - 36px)}header{height:72px}.status{font-size:8px}main{min-height:calc(100vh - 132px);padding:48px 0}h1{font-size:42px}.lead{font-size:14px}.actions{align-items:flex-start;flex-direction:column;gap:16px}footer{align-items:flex-start;flex-direction:column;justify-content:center;padding:14px 0}}
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">
+      <img src="/smallnginxcontrol-brand.png" alt="">
+      <span>SmallnGinxControl<small>NGINX / SERVER</small></span>
+    </a>
+    <span class="status"><i aria-hidden="true"></i>NGINX запущен</span>
+  </header>
+  <main>
+    <section class="welcome" aria-labelledby="welcome-title">
+      <div class="eyebrow">Сервис готов к работе</div>
+      <h1 id="welcome-title">Добро пожаловать.</h1>
+      <p class="lead">Веб-сервер работает. Добавьте виртуальный хост или reverse proxy в панели управления — ваш сайт будет доступен здесь.</p>
+      <div class="actions">
+        <a class="primary" href="https://__PANEL_HOST__:7444/">Открыть панель управления <span aria-hidden="true">→</span></a>
+        <a class="secondary" href="https://github.com/DgekStr/SmallnGinxControl" target="_blank" rel="noopener noreferrer">О проекте на GitHub</a>
+      </div>
+      <p class="notice">При первом переходе в панель браузер может предупредить о локальном self-signed сертификате. Его можно скачать и добавить в доверенные в разделе «Настройки → HTTPS панели».</p>
+    </section>
+  </main>
+  <footer>
+    <span>SmallnGinxControl · бесплатно по MIT License</span>
+    <span>Copyright © 2026 <a href="https://github.com/DgekStr" target="_blank" rel="noopener noreferrer">DgekStr</a></span>
+  </footer>
+</body>
+</html>

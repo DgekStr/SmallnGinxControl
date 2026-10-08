@@ -16,10 +16,25 @@ CLEANUP_TIMER_FILE=/etc/systemd/system/smallnginxcontrol-log-cleanup.timer
 STATE_DIR=/var/lib/smallnginxcontrol
 PANEL_TLS_CONFIG_FILE=/etc/nginx/conf.d/smallnginxcontrol-panel.conf
 PANEL_TLS_CONFIG_CREATED=0
+PANEL_WELCOME_FILE=/var/www/html/index.html
+PANEL_WELCOME_BRAND_FILE=/var/www/html/smallnginxcontrol-brand.png
+PANEL_WELCOME_LATIN_FONT=/var/www/html/smallnginxcontrol-manrope-latin.woff2
+PANEL_WELCOME_CYRILLIC_FONT=/var/www/html/smallnginxcontrol-manrope-cyrillic.woff2
+PANEL_WELCOME_CREATED=0
+PANEL_WELCOME_ENABLED=1
 
 if [[ ! $INSTALL_DIR =~ ^/[A-Za-z0-9_./-]+$ || $INSTALL_DIR == / || $INSTALL_DIR == *..* ]]; then
     echo 'SNC_INSTALL_DIR must be a simple absolute path without spaces or parent references.' >&2
     exit 1
+fi
+for welcome_file in "$PANEL_WELCOME_FILE" "$PANEL_WELCOME_BRAND_FILE" "$PANEL_WELCOME_LATIN_FONT" "$PANEL_WELCOME_CYRILLIC_FONT"; do
+    if [[ -e $welcome_file || -L $welcome_file ]]; then
+        PANEL_WELCOME_ENABLED=0
+        break
+    fi
+done
+if (( ! PANEL_WELCOME_ENABLED )); then
+    echo 'Existing /var/www/html content detected; leaving the current HTTP welcome page unchanged.'
 fi
 if [[ -e $ENV_FILE || -e $SERVICE_FILE || -e $CLEANUP_SERVICE_FILE || -e $CLEANUP_TIMER_FILE ]]; then
     echo 'Service configuration already exists; refusing to overwrite it.' >&2
@@ -46,6 +61,9 @@ cleanup_failed_install() {
         if (( PANEL_TLS_CONFIG_CREATED )); then
             rm -f "$PANEL_TLS_CONFIG_FILE"
             systemctl reload nginx >/dev/null 2>&1 || true
+        fi
+        if (( PANEL_WELCOME_CREATED )); then
+            rm -f "$PANEL_WELCOME_FILE" "$PANEL_WELCOME_BRAND_FILE" "$PANEL_WELCOME_LATIN_FONT" "$PANEL_WELCOME_CYRILLIC_FONT"
         fi
         rm -f "$SERVICE_FILE" "$CLEANUP_SERVICE_FILE" "$CLEANUP_TIMER_FILE" "$ENV_FILE"
         systemctl daemon-reload >/dev/null 2>&1 || true
@@ -160,6 +178,15 @@ if [[ ! -e $PANEL_TLS_CONFIG_FILE ]]; then
     PANEL_TLS_CONFIG_CREATED=1
 fi
 "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/manage.py" shell -c 'from panel.panel_tls import install_panel_tls; install_panel_tls()'
+if (( PANEL_WELCOME_ENABLED )); then
+    PANEL_WELCOME_CREATED=1
+    sed "s|__PANEL_HOST__|$PANEL_HOST|g" "$INSTALL_DIR/deploy/welcome.html" > "$PANEL_WELCOME_FILE"
+    install -o root -g root -m 0644 "$INSTALL_DIR/static/brand.png" "$PANEL_WELCOME_BRAND_FILE"
+    install -o root -g root -m 0644 "$INSTALL_DIR/static/vendor/manrope-latin.woff2" "$PANEL_WELCOME_LATIN_FONT"
+    install -o root -g root -m 0644 "$INSTALL_DIR/static/vendor/manrope-cyrillic.woff2" "$PANEL_WELCOME_CYRILLIC_FONT"
+    chmod 0644 "$PANEL_WELCOME_FILE"
+    echo 'Installed the SmallnGinxControl welcome page in /var/www/html.'
+fi
 
 systemctl daemon-reload
 systemctl enable --now smallnginxcontrol

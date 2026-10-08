@@ -2,13 +2,22 @@ from concurrent.futures import Future
 import sqlite3
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from .metrics import collect_completed, enable_sqlite_wal
+from .metrics import collect_completed, enable_sqlite_wal, local_uptime
 
 
 class MetricCollectorTests(SimpleTestCase):
+    def test_local_uptime_prefers_proc_uptime_over_host_boot_time(self):
+        with patch('panel.metrics.Path.read_text', return_value='14996.45 14996.45'), patch('panel.metrics.psutil.boot_time', return_value=1):
+            self.assertEqual(local_uptime(), 14996.45)
+
+    def test_local_uptime_falls_back_when_proc_uptime_is_unavailable(self):
+        with patch('panel.metrics.Path.read_text', side_effect=OSError), patch('panel.metrics.time.time', return_value=1000), patch('panel.metrics.psutil.boot_time', return_value=250):
+            self.assertEqual(local_uptime(), 750)
+
     def test_enable_sqlite_wal_for_file_database(self):
         with tempfile.TemporaryDirectory() as directory:
             connection = sqlite3.connect(Path(directory) / 'panel.sqlite3')

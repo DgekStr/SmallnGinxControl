@@ -63,6 +63,13 @@ def sample_from_raw(raw, previous, now):
     return dict(cpu=cpu, memory=raw['memory'], disk_used_bytes=raw.get('disk_used_bytes', 0), disk_total_bytes=raw.get('disk_total_bytes', 0), rx_rate=rx_rate, tx_rate=tx_rate, rx_mb=raw['rx_bytes'] / 1_000_000, tx_mb=raw['tx_bytes'] / 1_000_000, uptime=raw['uptime'])
 
 
+def local_uptime():
+    try:
+        return float(Path('/proc/uptime').read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return time.time() - psutil.boot_time()
+
+
 def local_raw(interface):
     counters = psutil.net_io_counters(pernic=True)
     if interface:
@@ -71,7 +78,7 @@ def local_raw(interface):
         counters = {name: value for name, value in counters.items() if name != 'lo' and not name.startswith(('veth', 'docker', 'br-', 'virbr'))}
     cpu = psutil.cpu_times()
     disk = psutil.disk_usage(Path(settings.BASE_DIR).anchor or '/')
-    return dict(cpu_total=sum(cpu) - getattr(cpu, 'guest', 0) - getattr(cpu, 'guest_nice', 0), cpu_idle=cpu.idle + getattr(cpu, 'iowait', 0), memory=psutil.virtual_memory().percent, disk_used_bytes=disk.used, disk_total_bytes=disk.total, rx_bytes=sum(value.bytes_recv for value in counters.values()), tx_bytes=sum(value.bytes_sent for value in counters.values()), uptime=time.time() - psutil.boot_time())
+    return dict(cpu_total=sum(cpu) - getattr(cpu, 'guest', 0) - getattr(cpu, 'guest_nice', 0), cpu_idle=cpu.idle + getattr(cpu, 'iowait', 0), memory=psutil.virtual_memory().percent, disk_used_bytes=disk.used, disk_total_bytes=disk.total, rx_bytes=sum(value.bytes_recv for value in counters.values()), tx_bytes=sum(value.bytes_sent for value in counters.values()), uptime=local_uptime())
 
 
 def collect_server(server, previous):

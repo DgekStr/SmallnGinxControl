@@ -140,6 +140,26 @@ test('certificate expiry is shown only for HTTPS hosts', async ({page}) => {
   await expect(http.locator('.certificate-expiry')).toHaveCount(0);
 });
 
+test('domain registration expiry uses 30, 20 and 10 day warning thresholds', async ({page}) => {
+  await login(page);
+  const markup = await page.evaluate(() => hostTable([
+    {id: 'soon', name: '*.dgek.ru', domains: ['*.dgek.ru'], kind: 'host', target: '/var/www/soon', domain_expiry: [{domain: 'dgek.ru', days: 29}], enabled: true, toggleable: true, servers: 1},
+    {id: 'urgent', name: 'shop.example.com', domains: ['shop.example.com'], kind: 'host', target: '/var/www/urgent', domain_expiry: [{domain: 'example.com', days: 19}], enabled: true, toggleable: true, servers: 1},
+    {id: 'critical', name: 'api.example.net', domains: ['api.example.net'], kind: 'proxy', target: 'http://127.0.0.1:3000', domain_expiry: [{domain: 'example.net', days: 9}], enabled: true, toggleable: true, servers: 1},
+    {id: 'safe', name: 'docs.example.org', domains: ['docs.example.org'], kind: 'host', target: '/var/www/docs', domain_expiry: [{domain: 'example.org', days: 30}], enabled: true, toggleable: true, servers: 1},
+    {id: 'pending', name: 'new.example.dev', domains: ['new.example.dev'], kind: 'host', target: '/var/www/new', domain_expiry: [{domain: 'example.dev', status: 'checking', days: null}], enabled: true, toggleable: true, servers: 1},
+    {id: 'internal', name: 'grafana.internal', domains: ['grafana.internal'], kind: 'proxy', target: 'http://127.0.0.1:3000', domain_expiry: [], enabled: true, toggleable: true, servers: 1},
+  ]));
+  await page.locator('#hosts-table').evaluate((element, html) => { element.innerHTML = html; }, markup);
+  await expect(page.locator('#hosts-table tr[data-id="soon"] .domain-expiry')).toHaveClass(/warning/);
+  await expect(page.locator('#hosts-table tr[data-id="urgent"] .domain-expiry')).toHaveClass(/urgent/);
+  await expect(page.locator('#hosts-table tr[data-id="critical"] .domain-expiry')).toHaveClass(/critical/);
+  await expect(page.locator('#hosts-table tr[data-id="safe"] .domain-expiry')).not.toHaveClass(/warning|urgent|critical/);
+  await expect(page.locator('#hosts-table tr[data-id="pending"] .domain-expiry')).toHaveText('Проверяется…');
+  await expect(page.locator('#hosts-table tr[data-id="pending"] .domain-expiry')).toHaveClass(/pending/);
+  await expect(page.locator('#hosts-table tr[data-id="internal"] .domain-expiry')).toHaveCount(0);
+});
+
 test('hosts and proxies are sorted alphabetically', async ({page}) => {
   await login(page);
   for (const view of ['hosts', 'proxies']) {

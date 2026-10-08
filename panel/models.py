@@ -120,3 +120,13 @@ class ServiceSetting(models.Model):
     @classmethod
     def get_solo(cls):
         return cls.objects.get_or_create(pk=1)[0]
+
+
+class DomainExpiry(models.Model):
+    domain = models.CharField(max_length=253, primary_key=True)
+    expires_on = models.DateField(null=True, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=16, default='pending', choices=[('pending', 'Pending'), ('checking', 'Checking'), ('ready', 'Ready'), ('unavailable', 'Unavailable')])
+
+    class Meta:
+        ordering = ['domain']

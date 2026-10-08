@@ -24,6 +24,7 @@
     <section class="section"><h2>Что изменилось</h2><div class="grid">
       <article class="item"><h3>HTTPS ingress</h3><p>nginx принимает TLS на 0.0.0.0:7444, Waitress остаётся закрыт на 127.0.0.1:7445.</p></article>
       <article class="item"><h3>Сертификат панели</h3><p>Self-signed сертификат с IP/DNS SAN создаётся автоматически; перевыпуск и замена PEM-пары доступны в настройках.</p></article>
+      <article class="item"><h3>Регистрация доменов</h3><p>WHOIS expiry для публичных hosts/proxy, обновление раз в сутки и при подключении к SSH-серверу; wildcard сопоставляется корневому домену.</p></article>
       <article class="item"><h3>«О программе»</h3><p>GitHub, руководство, MIT License, авторство, бесплатная лицензия и прозрачные условия на случай будущих отдельных платных услуг.</p></article>
     </div></section>
     <section class="section"><h2>Меню сервиса</h2><img class="shot" src="images/servers.png" alt="Список серверов nginx v1.0.3"><p class="caption">Список demo/SSH профилей; пункт «О программе» закреплён внизу меню.</p><p class="note">Программа распространяется бесплатно по MIT License. Если появятся отдельные платные услуги или клиентский биллинг, их условия будут опубликованы отдельно; бесплатная версия не создаёт платных обязательств.</p></section>
