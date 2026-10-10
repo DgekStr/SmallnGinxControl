@@ -61,7 +61,7 @@ test('about page is the bottom service menu entry and explains license and billi
   await expect(page.locator('.sidebar-bottom [data-view="about"]')).toBeVisible();
   await page.locator('.sidebar-bottom [data-view="about"]').click();
   await expect(page.locator('#page-title')).toHaveText('О программе');
-  await expect(page.locator('#view-about')).toContainText('1.0.6');
+  await expect(page.locator('#view-about')).toContainText('1.0.7');
   await expect(page.locator('#view-about')).toContainText('распространяется бесплатно');
   await expect(page.locator('#view-about')).toContainText('клиентский биллинг');
   await expect(page.locator('#view-about a[href="https://github.com/DgekStr/SmallnGinxControl"]')).toBeVisible();
@@ -502,7 +502,7 @@ test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
   await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(9);
-  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Проверка доменов', 'TOP-5 по трафику', 'Отключение из-за неоплаты', 'HTTPS панели']);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Проверка доменов', 'TOP-5 по трафику', 'Сообщение при неоплате', 'HTTPS панели']);
   await expect(page.locator('#panel-tls-status')).toHaveText('Только production');
   await expect(page.locator('#panel-tls-renew')).toBeDisabled();
   await expect(page.locator('#panel-tls-download')).toBeDisabled();

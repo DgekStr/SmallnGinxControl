@@ -74,6 +74,8 @@ class NginxTests(SimpleTestCase):
                 self.assertTrue(suspended['nonpayment'])
                 self.assertIn('отключён по причине неоплаты', page)
                 self.assertIn('Свяжитесь с администратором хостинга', page)
+                self.assertIn('<p class="actions contact-message">Свяжитесь с администратором хостинга</p>', page)
+                self.assertNotIn('Сайт временно не обслуживается.', page)
                 self.assertNotIn('$host', page)
                 self.assertIn('error_page 503 /__smallnginxcontrol_nonpayment.html;', content)
                 self.assertLess(

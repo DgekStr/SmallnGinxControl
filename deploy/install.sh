@@ -7,7 +7,7 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
 fi
 
 REPOSITORY=${SNC_REPOSITORY:-https://github.com/DgekStr/SmallnGinxControl.git}
-RELEASE_TAG=${SNC_RELEASE_TAG:-v1.0.6}
+RELEASE_TAG=${SNC_RELEASE_TAG:-v1.0.7}
 INSTALL_DIR=${SNC_INSTALL_DIR:-/opt/smallnginxcontrol}
 ENV_FILE=/etc/smallnginxcontrol.env
 SERVICE_FILE=/etc/systemd/system/smallnginxcontrol.service
