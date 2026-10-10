@@ -17,9 +17,10 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods, require_POST
 
+from .api_keys import api_key_access, generate_key, key_status
 from .metrics import snapshot
 from .mattermost import send_webhook_message, validate_webhook_url
-from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting, TwoFactorCredential
+from .models import ApiKey, AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting, TwoFactorCredential
 from .panel_tls import MAX_PEM_BYTES, panel_certificate_path, panel_tls_status, renew_panel_certificate, replace_panel_certificate
 from .domain_expiry import enrich_inventory_domains
 from .servers import AddressForm, ServerForm, initialize_demo, manager_for, public_server, selected_server
@@ -176,6 +177,7 @@ def index(request):
 
 @never_cache
 @require_http_methods(['GET', 'POST'])
+@api_key_access
 def api(request, resource):
     if not request.user.is_authenticated:
         return JsonResponse({'error': 'Требуется вход.'}, status=401)
@@ -185,13 +187,15 @@ def api(request, resource):
     try:
         if resource == 'servers' and request.method == 'GET':
             return JsonResponse({'servers': [public_server(item) for item in Server.objects.all()]})
-        if resource not in {'servers', 'password', 'settings', 'two-factor', 'panel-tls', 'panel-tls-download'}:
+        if resource not in {'servers', 'password', 'settings', 'two-factor', 'panel-tls', 'panel-tls-download', 'api-key'}:
             server = selected_server(request.GET.get('server'))
             expected_profile = request.GET.get('server_revision')
             if (expected_profile is not None or request.method == 'POST') and expected_profile != server.updated_at.isoformat():
                 raise OperationError('Профиль сервера изменён или не подтверждён. Обновите страницу перед операцией.')
             manager = manager_for(server)
         if request.method == 'GET':
+            if resource == 'api-key':
+                return JsonResponse({**key_status(request.user), 'base_url': request.build_absolute_uri('/api/')})
             if resource == 'traffic-maintenance':
                 return JsonResponse({'enabled': server.traffic_blocked, 'page_path': server.maintenance_page_path})
             if resource == 'two-factor':
@@ -258,6 +262,20 @@ def api(request, resource):
         data = json.loads(request.body)
         if not isinstance(data, dict):
             raise OperationError('Ожидается JSON-объект.')
+        if resource == 'api-key':
+            with transaction.atomic():
+                if data.get('action') == 'generate':
+                    read_only = data.get('read_only', True)
+                    if type(read_only) is not bool:
+                        raise OperationError('Режим чтения должен быть true или false.')
+                    key = generate_key(request.user, read_only)
+                    record(request, 'api_key_generate', request.user.get_username())
+                    return JsonResponse({'ok': True, 'key': key, **key_status(request.user)})
+                if data.get('action') == 'revoke':
+                    ApiKey.objects.filter(user=request.user).delete()
+                    record(request, 'api_key_revoke', request.user.get_username())
+                    return JsonResponse({'ok': True, 'message': 'API-ключ отозван.', **key_status(request.user)})
+                raise OperationError('Неизвестное действие с API-ключом.')
         if resource == 'servers':
             return JsonResponse(manage_servers(request, data))
         target = data.get('id', '')

@@ -77,7 +77,7 @@ test('about page is the bottom service menu entry and explains license and billi
   await expect(page.locator('.sidebar-bottom [data-view="about"]')).toBeVisible();
   await page.locator('.sidebar-bottom [data-view="about"]').click();
   await expect(page.locator('#page-title')).toHaveText('О программе');
-  await expect(page.locator('#view-about')).toContainText('1.0.8');
+  await expect(page.locator('#view-about')).toContainText(require('../package.json').version);
   await expect(page.locator('#view-about')).toContainText('распространяется бесплатно');
   await expect(page.locator('#view-about')).toContainText('клиентский биллинг');
   await expect(page.locator('#view-about a[href="https://github.com/DgekStr/SmallnGinxControl"]')).toBeVisible();
@@ -514,11 +514,67 @@ test('switching server clears previous SSD usage while new metrics load', async 
   expect(previousDisk).toContain('%');
 });
 
+for (const width of [1440, 390]) {
+  test(`API integration generates, copies, rotates and revokes a key at ${width}px`, async ({page}) => {
+    await login(page);
+    await page.locator('[data-view="settings"]').click();
+    await expect(page.locator('#api-key-status')).toHaveText('Не создан');
+    await page.setViewportSize({width, height: 1000});
+    await expect(page.locator('#api-key-access')).toHaveValue('read');
+    await expect(page.locator('#api-key-revoke')).toBeDisabled();
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (value) => { window.copiedApiKey = value; }}}));
+    await page.locator('#api-key-generate').click();
+    const dialog = page.locator('#api-key-dialog');
+    const secret = page.locator('#api-key-secret');
+    await expect(dialog).toBeVisible();
+    await expect(secret).toHaveValue(/^snc_[A-Za-z0-9_-]{43}$/);
+    await expect(secret).toHaveAttribute('type', 'password');
+    const oldKey = await secret.inputValue();
+    await page.locator('#api-key-show').click();
+    await expect(secret).toHaveAttribute('type', 'text');
+    await page.locator('#api-key-copy').click();
+    await expect(page.locator('#api-key-copy-result')).toContainText('Ключ скопирован');
+    expect(await page.evaluate((key) => window.copiedApiKey === key, oldKey)).toBe(true);
+    const layout = await dialog.evaluate((element) => {
+      const modal = element.getBoundingClientRect();
+      const copy = element.querySelector('#api-key-copy').getBoundingClientRect();
+      return {overflow: document.documentElement.scrollWidth > innerWidth, copyFits: copy.right <= modal.right};
+    });
+    expect(layout).toEqual({overflow: false, copyFits: true});
+    await dialog.locator('.modal-footer button').click();
+    await expect(secret).toHaveValue('');
+    await expect(secret).toHaveAttribute('type', 'password');
+    await page.reload();
+    await expect(page.locator('#api-key-status')).toHaveText('Активен');
+    await expect(secret).toHaveValue('');
+    await page.locator('#api-key-access').selectOption('manage');
+    await page.locator('#api-key-generate').click();
+    await expect(page.locator('#confirm-dialog')).toBeVisible();
+    await page.locator('#confirm-cancel').click();
+    expect((await page.request.get('/api/servers/', {headers: {Authorization: 'Bearer ' + oldKey}})).status()).toBe(200);
+    await page.locator('#api-key-generate').click();
+    await page.locator('#confirm-accept').click();
+    await expect(dialog).toBeVisible();
+    const newKey = await secret.inputValue();
+    expect(newKey).not.toBe(oldKey);
+    expect((await page.request.get('/api/servers/', {headers: {Authorization: 'Bearer ' + oldKey}})).status()).toBe(401);
+    expect((await page.request.get('/api/servers/', {headers: {Authorization: 'Bearer ' + newKey}})).status()).toBe(200);
+    await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();
+    await expect(secret).toHaveValue('');
+    await page.locator('#api-key-revoke').click();
+    await page.locator('#confirm-accept').click();
+    await expect(page.locator('#api-key-status')).toHaveText('Не создан');
+    await expect(page.locator('#api-key-revoke')).toBeDisabled();
+    expect((await page.request.get('/api/servers/', {headers: {Authorization: 'Bearer ' + newKey}})).status()).toBe(401);
+  });
+}
+
 test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
-  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(9);
-  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Сообщение при неоплате', 'Проверка доменов', 'TOP-5 по трафику', 'HTTPS панели']);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(10);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'API-интеграция', 'Хранение логов', 'Уведомления Mattermost', 'Сообщение при неоплате', 'Проверка доменов', 'TOP-5 по трафику', 'HTTPS панели']);
   await expect(page.locator('#panel-tls-status')).toHaveText('Только production');
   await expect(page.locator('#panel-tls-renew')).toBeDisabled();
   await expect(page.locator('#panel-tls-download')).toBeDisabled();

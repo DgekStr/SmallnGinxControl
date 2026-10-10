@@ -10,6 +10,7 @@ const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access'
 let twoFactorEnabled = false;
 let trafficBlocked = false;
 let mattermostWebhookConfigured = false;
+let apiKeyEnabled = false;
 Object.assign(state, {servers: [], serverId: sessionStorage.getItem('snc-server') || 'local', serverRevision: null, generation: 0, switching: false, serverReady: false, inventoryLoaded: false, editingServer: null});
 const titles = {
   servers: ['Серверы nginx', 'NGINX / SERVER CONNECTIONS', 'Серверы'],
@@ -29,7 +30,7 @@ function icons() {
 }
 
 async function request(resource, data, parameters = {}) {
-  const scoped = !['servers', 'password', 'settings', 'two-factor', 'panel-tls', 'panel-tls-download'].includes(resource);
+  const scoped = !['servers', 'password', 'settings', 'two-factor', 'panel-tls', 'panel-tls-download', 'api-key'].includes(resource);
   const generation = state.generation;
   const search = new URLSearchParams(parameters);
   if (scoped) search.set('server', state.serverId);
@@ -355,6 +356,86 @@ function renderTrafficTop(result) {
     const kind = item.kind === 'proxy' ? 'Reverse proxy' : 'Виртуальный хост';
     return `<div class="traffic-rank" data-bytes="${item.bytes}"><div class="traffic-rank-host"><span class="traffic-rank-number">0${index + 1}</span><span class="traffic-rank-name"><strong title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</strong><small>${kind}</small></span></div><div class="traffic-rank-track"><span class="traffic-rank-fill rank-${index + 1}" style="width:${width}%"></span></div><strong class="traffic-rank-value">${trafficSize(item.bytes)}</strong></div>`;
   }).join('');
+}
+
+function renderApiKeySettings(result) {
+  apiKeyEnabled = result.enabled;
+  query('#api-key-status').textContent = apiKeyEnabled ? 'Активен' : 'Не создан';
+  query('#api-key-status').className = 'badge ' + (apiKeyEnabled ? 'success' : 'neutral');
+  query('#api-key-prefix').textContent = result.prefix ? result.prefix + '...' : '-';
+  query('#api-key-created').textContent = result.created_at ? new Date(result.created_at).toLocaleString('ru-RU') : '-';
+  query('#api-key-last-used').textContent = result.last_used_at ? new Date(result.last_used_at).toLocaleString('ru-RU') : '-';
+  query('#api-key-access').value = result.read_only ? 'read' : 'manage';
+  query('#api-key-generate-label').textContent = apiKeyEnabled ? 'Перевыпустить ключ' : 'Сгенерировать ключ';
+  query('#api-key-revoke').disabled = !apiKeyEnabled;
+  if (result.base_url) query('#api-key-base-url').textContent = result.base_url;
+}
+
+function ensureApiKeySettings() {
+  if (query('#api-key-generate')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section api-integration-section';
+  section.innerHTML = '<div class="section-heading"><h2>API-интеграция</h2><i data-lucide="plug-zap"></i></div><dl class="settings-details"><div><dt>Статус</dt><dd id="api-key-status">Загрузка</dd></div><div><dt>API URL</dt><dd id="api-key-base-url" class="mono"></dd></div><div><dt>Ключ</dt><dd id="api-key-prefix" class="mono"></dd></div><div><dt>Создан</dt><dd id="api-key-created"></dd></div><div><dt>Последний запрос</dt><dd id="api-key-last-used"></dd></div></dl><label>Доступ<select id="api-key-access"><option value="read">Только чтение</option><option value="manage">Управление</option></select></label><div id="api-key-result" class="operation-result" hidden></div><div class="panel-tls-actions"><button class="button primary" id="api-key-generate" type="button"><i data-lucide="key-round"></i><span id="api-key-generate-label">Сгенерировать ключ</span></button><button class="button danger" id="api-key-revoke" type="button" disabled><i data-lucide="shield-off"></i>Отозвать</button></div>';
+  query('#view-settings .settings-layout').append(section);
+  const dialog = document.createElement('dialog');
+  dialog.id = 'api-key-dialog';
+  dialog.className = 'modal';
+  dialog.setAttribute('aria-labelledby', 'api-key-dialog-title');
+  dialog.innerHTML = '<div class="modal-heading"><h2 id="api-key-dialog-title">Новый API-ключ</h2><button class="icon-button" type="button" data-close="api-key-dialog" title="Закрыть" aria-label="Закрыть"><i data-lucide="x"></i></button></div><label>API-ключ<div class="fingerprint-input"><input id="api-key-secret" type="password" readonly autocomplete="off" class="mono"><button class="icon-button" id="api-key-show" type="button" title="Показать ключ" aria-label="Показать ключ"><i data-lucide="eye"></i></button><button class="icon-button" id="api-key-copy" type="button" title="Скопировать ключ" aria-label="Скопировать ключ"><i data-lucide="copy"></i></button></div></label><div id="api-key-copy-result" class="operation-result" role="status" hidden></div><div class="modal-footer"><button class="button" type="button" data-close="api-key-dialog">Закрыть</button></div>';
+  document.body.append(dialog);
+  const secretInput = query('#api-key-secret');
+  const setVisibility = (visible) => {
+    secretInput.type = visible ? 'text' : 'password';
+    const button = query('#api-key-show');
+    button.title = visible ? 'Скрыть ключ' : 'Показать ключ';
+    button.setAttribute('aria-label', button.title);
+    button.innerHTML = icon(visible ? 'eye-off' : 'eye');
+    icons();
+  };
+  dialog.addEventListener('close', () => {
+    secretInput.value = '';
+    setVisibility(false);
+    query('#api-key-copy-result').hidden = true;
+    query('#api-key-copy-result').textContent = '';
+  });
+  query('#api-key-show').addEventListener('click', () => setVisibility(secretInput.type === 'password'));
+  query('#api-key-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(secretInput.value);
+      showResult('#api-key-copy-result', 'Ключ скопирован.', true);
+    } catch {
+      showResult('#api-key-copy-result', 'Не удалось скопировать ключ.');
+    }
+  });
+  query('#api-key-generate').addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+    const readOnly = query('#api-key-access').value === 'read';
+    if (apiKeyEnabled || !readOnly) {
+      const description = (apiKeyEnabled ? 'Предыдущий ключ сразу потеряет доступ. ' : '') + (!readOnly ? 'Новый ключ сможет изменять конфигурации и управлять nginx.' : 'Подключённым сервисам потребуется новый ключ.');
+      if (!await confirmAction(apiKeyEnabled ? 'Перевыпустить API-ключ?' : 'Разрешить управление через API?', description, true)) return;
+    }
+    const result = await request('api-key', {action: 'generate', read_only: readOnly});
+    renderApiKeySettings(result);
+    query('#api-key-result').hidden = true;
+    secretInput.value = result.key;
+    setVisibility(false);
+    dialog.showModal();
+  }, '#api-key-result'));
+  query('#api-key-revoke').addEventListener('click', async (event) => {
+    await runAction(event.currentTarget, async () => {
+      if (!await confirmAction('Отозвать API-ключ?', 'Подключённые сервисы потеряют доступ к API.', true)) return;
+      const result = await request('api-key', {action: 'revoke'});
+      renderApiKeySettings(result);
+      showResult('#api-key-result', result.message, true);
+    }, '#api-key-result');
+    query('#api-key-revoke').disabled = !apiKeyEnabled;
+  });
+  icons();
+}
+
+async function refreshApiKeySettings() {
+  ensureApiKeySettings();
+  renderApiKeySettings(await request('api-key'));
+  query('#api-key-result').hidden = true;
 }
 
 function ensureMattermostWebhookForm() {
@@ -777,8 +858,9 @@ async function route() {
       await refreshTrafficMaintenanceSettings();
       await refreshPanelTlsSettings();
       await refreshNonpaymentContactSettings();
+      await refreshApiKeySettings();
       const layout = query('#view-settings .settings-layout');
-      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.mattermost-webhook-section'), query('.nonpayment-contact-section'), query('.domain-expiry-scheduler-section'), query('.access-log-sample-section'), query('.panel-tls-section'));
+      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.api-integration-section'), query('.log-retention-section'), query('.mattermost-webhook-section'), query('.nonpayment-contact-section'), query('.domain-expiry-scheduler-section'), query('.access-log-sample-section'), query('.panel-tls-section'));
     }
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }

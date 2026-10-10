@@ -3,11 +3,13 @@ from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import Client, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 
 import pyotp
 
-from .models import AuditEvent, Server, ServiceSetting, TwoFactorCredential
+from .models import ApiKey, AuditEvent, Server, ServiceSetting, TwoFactorCredential
 from .two_factor import generate_totp_secret, provisioning_uri
 
 
@@ -251,6 +253,134 @@ class AuthenticationTests(TestCase):
             self.client.post('/login/', {'username': 'admin', 'password': 'wrong'})
         response = self.client.post('/login/', {'username': 'admin', 'password': '12345'})
         self.assertEqual(response.status_code, 429)
+
+
+class ApiKeyTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('integration-admin', password='test-password', is_staff=True)
+        self.client.force_login(self.user)
+
+    def generate(self, read_only=True):
+        response = self.client.post('/api/api-key/', {'action': 'generate', 'read_only': read_only}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        return response.json()['key']
+
+    def bearer_client(self, key):
+        return Client(enforce_csrf_checks=True, HTTP_AUTHORIZATION='Bearer ' + key)
+
+    def test_generation_hashes_secret_and_never_returns_it_in_status_or_audit(self):
+        key = self.generate()
+        credential = ApiKey.objects.get(user=self.user)
+        self.assertTrue(credential.read_only)
+        self.assertEqual(len(credential.key_hash), 64)
+        self.assertNotIn(key, credential.key_hash)
+        self.assertEqual(credential.prefix, key[:12])
+        response = self.client.get('/api/api-key/')
+        self.assertTrue(response.json()['enabled'])
+        self.assertNotIn('key', response.json())
+        self.assertNotIn(key, response.content.decode())
+        self.assertNotIn(key, repr(list(AuditEvent.objects.values())))
+        self.assertIn('no-store', response['Cache-Control'])
+
+    def test_bearer_authenticates_without_session_and_tracks_usage(self):
+        client = self.bearer_client(self.generate())
+        response = client.get('/api/servers/')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('_auth_user_id', client.session)
+        self.assertIsNotNone(ApiKey.objects.get(user=self.user).last_used_at)
+
+    def test_read_only_key_cannot_write(self):
+        client = self.bearer_client(self.generate())
+        with patch('panel.views.manager_for') as manager_for:
+            response = client.post('/api/service/', {'action': 'reload'}, content_type='application/json')
+        self.assertEqual(response.status_code, 403)
+        manager_for.assert_not_called()
+
+    def test_write_key_supports_nonpayment_and_keeps_actor_and_revision_checks(self):
+        client = self.bearer_client(self.generate(read_only=False))
+        server = Server.objects.create(name='Integration demo', host='127.0.0.1', mode='demo', is_default=True)
+        parameters = urlencode({'server': server.pk, 'server_revision': server.updated_at.isoformat()})
+        with patch('panel.views.manager_for') as manager_for:
+            manager_for.return_value.toggle_nonpayment.return_value = 'Disabled'
+            response = client.post('/api/hosts/?' + parameters, {'action': 'nonpayment', 'id': 'billing.conf', 'enabled': True, 'revision': 'revision-1'}, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        manager_for.return_value.toggle_nonpayment.assert_called_once_with('billing.conf', True, 'revision-1', ServiceSetting.get_solo().nonpayment_contact_text)
+        self.assertEqual(AuditEvent.objects.get(action='nonpayment_block').actor, self.user.get_username())
+        with patch('panel.views.manager_for') as manager_for:
+            response = client.post('/api/hosts/?server=' + server.pk, {'action': 'nonpayment'}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        manager_for.assert_not_called()
+
+    def test_rotation_and_revocation_invalidate_old_keys(self):
+        old_key = self.generate()
+        new_key = self.generate()
+        self.assertNotEqual(old_key, new_key)
+        self.assertEqual(self.bearer_client(old_key).get('/api/servers/').status_code, 401)
+        self.assertEqual(self.bearer_client(new_key).get('/api/servers/').status_code, 200)
+        response = self.client.post('/api/api-key/', {'action': 'revoke'}, content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['enabled'])
+        self.assertEqual(self.bearer_client(new_key).get('/api/servers/').status_code, 401)
+
+    def test_rotation_acquires_write_lock_before_reading_existing_key(self):
+        self.generate()
+        with CaptureQueriesContext(connection) as queries:
+            self.generate(read_only=False)
+        key_queries = [query['sql'] for query in queries if 'panel_apikey' in query['sql'].lower()]
+        self.assertTrue(key_queries)
+        self.assertTrue(key_queries[0].startswith('UPDATE'), key_queries[0])
+        self.assertFalse(ApiKey.objects.get(user=self.user).read_only)
+
+    def test_sensitive_resources_are_session_only_even_for_write_keys(self):
+        client = self.bearer_client(self.generate(read_only=False))
+        for resource in ['api-key', 'password', 'two-factor', 'settings', 'panel-tls', 'panel-tls-download']:
+            with self.subTest(resource=resource):
+                self.assertEqual(client.get('/api/' + resource + '/').status_code, 403)
+                self.assertEqual(client.post('/api/' + resource + '/', {'action': 'generate'}, content_type='application/json').status_code, 403)
+
+    def test_invalid_header_never_falls_back_to_admin_session(self):
+        self.generate()
+        for authorization in ['Bearer wrong', 'Basic credentials', 'Bearer ' + 'a' * 1000]:
+            with self.subTest(authorization=authorization):
+                response = self.client.get('/api/servers/', HTTP_AUTHORIZATION=authorization)
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response['WWW-Authenticate'], 'Bearer')
+
+    def test_key_in_url_is_not_accepted(self):
+        key = self.generate()
+        response = Client().get('/api/servers/?api_key=' + key)
+        self.assertEqual(response.status_code, 401)
+
+    def test_disabled_or_demoted_owner_invalidates_key(self):
+        client = self.bearer_client(self.generate())
+        self.user.is_active = False
+        self.user.save(update_fields=['is_active'])
+        self.assertEqual(client.get('/api/servers/').status_code, 401)
+        self.user.is_active = True
+        self.user.is_staff = False
+        self.user.save(update_fields=['is_active', 'is_staff'])
+        self.assertEqual(client.get('/api/servers/').status_code, 401)
+
+    def test_key_management_preserves_session_csrf_protection(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        self.assertEqual(client.post('/api/api-key/', {'action': 'generate'}, content_type='application/json').status_code, 403)
+        client.get('/')
+        response = client.post('/api/api-key/', {'action': 'generate'}, content_type='application/json', HTTP_X_CSRFTOKEN=client.cookies['csrftoken'].value)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(client.post('/api/api-key/', {'action': 'revoke'}, content_type='application/json').status_code, 403)
+        self.assertEqual(client.post('/api/settings/', {'log_retention_days': 12}, content_type='application/json').status_code, 403)
+
+    def test_key_management_is_per_admin_and_validates_mode(self):
+        key = self.generate()
+        other_user = get_user_model().objects.create_user('other-admin', password='test-password', is_staff=True)
+        self.client.force_login(other_user)
+        self.assertFalse(self.client.get('/api/api-key/').json()['enabled'])
+        self.assertEqual(self.client.post('/api/api-key/', {'action': 'revoke'}, content_type='application/json').status_code, 200)
+        self.assertEqual(self.bearer_client(key).get('/api/servers/').status_code, 200)
+        response = self.client.post('/api/api-key/', {'action': 'generate', 'read_only': 'false'}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(ApiKey.objects.filter(user=other_user).exists())
 
 
 class PanelTlsApiTests(TestCase):

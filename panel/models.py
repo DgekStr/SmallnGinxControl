@@ -6,6 +6,7 @@ from datetime import time
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 from .transactions import ACCESS_LOG_SAMPLE_DEFAULT_BYTES, ACCESS_LOG_SAMPLE_MAX_BYTES
 
@@ -109,6 +110,15 @@ class TwoFactorCredential(models.Model):
             self.encrypted_pending_secret = encrypted
         else:
             self.encrypted_secret = encrypted
+
+
+class ApiKey(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='api_key')
+    key_hash = models.CharField(max_length=64, unique=True)
+    prefix = models.CharField(max_length=12)
+    read_only = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    last_used_at = models.DateTimeField(null=True, blank=True)
 
 
 class ServiceSetting(models.Model):
