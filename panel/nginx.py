@@ -18,7 +18,8 @@ from .transactions import (
     validate_certificate_request, validate_maintenance_page_path,
     has_proxy_server, is_allowed_log_path,
     is_maintenance_config, is_nonpayment_config, maintenance_backup_path,
-    nonpayment_backup_path, render_maintenance_config, render_nonpayment_config,
+    nonpayment_backup_path, nonpayment_page_path, render_maintenance_config,
+    render_nonpayment_config, write_nonpayment_page,
 )
 
 
@@ -368,6 +369,7 @@ class NginxManager:
             if type(enabled) is not bool:
                 raise OperationError('Состояние отключения должно быть true или false.')
             stored = nonpayment_backup_path(self.state, identifier)
+            page_path = nonpayment_page_path(self.maintenance_root, identifier)
             if is_nonpayment_config(current):
                 if enabled:
                     return 'Отключение из-за неоплаты уже включено.'
@@ -381,6 +383,7 @@ class NginxManager:
                     self.validate, self.reload,
                 )
                 stored.unlink(missing_ok=True)
+                page_path.unlink(missing_ok=True)
                 return result
             if not enabled:
                 return 'Отключение из-за неоплаты уже выключено.'
@@ -391,17 +394,24 @@ class NginxManager:
                 raise OperationError('Сначала включите виртуальный хост.')
             if stored.exists():
                 raise OperationError('Резервная копия отключения уже существует. Восстановите сайт вручную.')
-            suspended = render_nonpayment_config(current, contact_text)
+            suspended, page_content = render_nonpayment_config(current, contact_text, page_path)
+            previous_page = page_path.read_bytes() if page_path.is_file() else None
             self.backup(identifier, current)
 
             def change():
                 stored.parent.mkdir(parents=True, exist_ok=True)
+                page_path.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write(stored, current)
+                write_nonpayment_page(page_path, page_content)
                 atomic_write(path, suspended)
 
             def rollback():
                 atomic_write(path, current)
                 stored.unlink(missing_ok=True)
+                if previous_page is None:
+                    page_path.unlink(missing_ok=True)
+                else:
+                    write_nonpayment_page(page_path, previous_page)
 
             return apply_transaction(change, rollback, self.validate, self.reload)
 
@@ -413,24 +423,32 @@ class NginxManager:
                     continue
                 path = self.path(item['id'])
                 stored = nonpayment_backup_path(self.state, item['id'])
+                page_path = nonpayment_page_path(self.maintenance_root, item['id'])
                 if not stored.is_file():
                     raise OperationError(f'Исходная конфигурация для {item["name"]} не найдена.')
                 current = path.read_bytes()
-                updated = render_nonpayment_config(stored.read_bytes(), contact_text)
-                if current != updated:
-                    changes.append((item['id'], path, current, updated))
+                updated, page_content = render_nonpayment_config(stored.read_bytes(), contact_text, page_path)
+                previous_page = page_path.read_bytes() if page_path.is_file() else None
+                if current != updated or previous_page != page_content:
+                    changes.append((item['id'], path, current, updated, page_path, previous_page, page_content))
             if not changes:
                 return 'Текст заглушки сохранён.'
-            for identifier, _, current, _ in changes:
+            for identifier, _, current, _, _, _, _ in changes:
                 self.backup(identifier, current)
 
             def change():
-                for _, path, _, updated in changes:
+                for _, path, _, updated, page_path, _, page_content in changes:
+                    page_path.parent.mkdir(parents=True, exist_ok=True)
+                    write_nonpayment_page(page_path, page_content)
                     atomic_write(path, updated)
 
             def rollback():
-                for _, path, current, _ in changes:
+                for _, path, current, _, page_path, previous_page, _ in changes:
                     atomic_write(path, current)
+                    if previous_page is None:
+                        page_path.unlink(missing_ok=True)
+                    else:
+                        write_nonpayment_page(page_path, previous_page)
 
             apply_transaction(change, rollback, self.validate, self.reload)
             return 'Текст заглушки обновлён.'
@@ -472,12 +490,14 @@ class NginxManager:
             if stored.is_file():
                 self.backup(identifier, stored.read_bytes())
             nonpayment_stored = nonpayment_backup_path(self.state, identifier)
+            nonpayment_page = nonpayment_page_path(self.maintenance_root, identifier)
             if nonpayment_stored.is_file():
                 self.backup(identifier, nonpayment_stored.read_bytes())
             delete_config_transaction(path, links, self.validate, self.reload)
             if stored.is_file():
                 stored.unlink()
             nonpayment_stored.unlink(missing_ok=True)
+            nonpayment_page.unlink(missing_ok=True)
             return 'Хост удалён из nginx. Резервная копия конфигурации сохранена.'
 
     def enable_host_logging(self, *, dry_run=True):

@@ -17,7 +17,8 @@ if __package__:
         certificate_details, issue_webroot_certificate, validate_certificate_request,
         delete_config_transaction, ensure_traffic_log_format, has_proxy_server, is_allowed_log_path,
         is_maintenance_config, is_nonpayment_config, maintenance_backup_path,
-        nonpayment_backup_path, render_maintenance_config, render_nonpayment_config,
+        nonpayment_backup_path, nonpayment_page_path, render_maintenance_config,
+        render_nonpayment_config, write_nonpayment_page,
         set_global_traffic_block, validate_maintenance_page_path,
     )
 
@@ -307,6 +308,7 @@ class RemoteWorker:
         if type(enabled) is not bool:
             raise OperationError('Nonpayment state must be a boolean')
         stored = nonpayment_backup_path(self.state, data['id'])
+        page_path = nonpayment_page_path(self.maintenance_root, data['id'])
         if is_nonpayment_config(current):
             if enabled:
                 return 'Nonpayment suspension is already enabled'
@@ -320,6 +322,7 @@ class RemoteWorker:
                 self.validate, self.reload,
             )
             stored.unlink(missing_ok=True)
+            page_path.unlink(missing_ok=True)
             return result
         if not enabled:
             return 'Nonpayment suspension is already disabled'
@@ -330,17 +333,24 @@ class RemoteWorker:
             raise OperationError('Enable the virtual host first')
         if stored.exists():
             raise OperationError('A nonpayment backup already exists; restore the site manually first')
-        suspended = render_nonpayment_config(current, data.get('contact_text', ''))
+        suspended, page_content = render_nonpayment_config(current, data.get('contact_text', ''), page_path)
+        previous_page = page_path.read_bytes() if page_path.is_file() else None
         self.backup(data['id'], current)
 
         def change():
             stored.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            page_path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(stored, current)
+            write_nonpayment_page(page_path, page_content)
             atomic_write(path, suspended)
 
         def rollback():
             atomic_write(path, current)
             stored.unlink(missing_ok=True)
+            if previous_page is None:
+                page_path.unlink(missing_ok=True)
+            else:
+                write_nonpayment_page(page_path, previous_page)
 
         return apply_transaction(change, rollback, self.validate, self.reload)
 
@@ -351,24 +361,32 @@ class RemoteWorker:
                 continue
             path = self.path(config['id'])
             stored = nonpayment_backup_path(self.state, config['id'])
+            page_path = nonpayment_page_path(self.maintenance_root, config['id'])
             if not stored.is_file():
                 raise OperationError(f'Original configuration for {config["id"]} is missing')
             current = path.read_bytes()
-            updated = render_nonpayment_config(stored.read_bytes(), contact_text)
-            if current != updated:
-                changes.append((config['id'], path, current, updated))
+            updated, page_content = render_nonpayment_config(stored.read_bytes(), contact_text, page_path)
+            previous_page = page_path.read_bytes() if page_path.is_file() else None
+            if current != updated or previous_page != page_content:
+                changes.append((config['id'], path, current, updated, page_path, previous_page, page_content))
         if not changes:
             return 'Nonpayment page text saved'
-        for identifier, _, current, _ in changes:
+        for identifier, _, current, _, _, _, _ in changes:
             self.backup(identifier, current)
 
         def change():
-            for _, path, _, updated in changes:
+            for _, path, _, updated, page_path, _, page_content in changes:
+                page_path.parent.mkdir(parents=True, exist_ok=True)
+                write_nonpayment_page(page_path, page_content)
                 atomic_write(path, updated)
 
         def rollback():
-            for _, path, current, _ in changes:
+            for _, path, current, _, page_path, previous_page, _ in changes:
                 atomic_write(path, current)
+                if previous_page is None:
+                    page_path.unlink(missing_ok=True)
+                else:
+                    write_nonpayment_page(page_path, previous_page)
 
         apply_transaction(change, rollback, self.validate, self.reload)
         return 'Nonpayment page text updated'
@@ -397,6 +415,7 @@ class RemoteWorker:
         links = [link for link in (self.root / 'sites-enabled').glob('*') if link.is_symlink() and link.resolve() == path] if standard_site else []
         stored = self.maintenance_backup(identifier)
         nonpayment_stored = nonpayment_backup_path(self.state, identifier)
+        nonpayment_page = nonpayment_page_path(self.maintenance_root, identifier)
         self.backup(identifier, content)
         if stored.is_file():
             self.backup(identifier, stored.read_bytes())
@@ -406,6 +425,7 @@ class RemoteWorker:
         if stored.is_file():
             stored.unlink()
         nonpayment_stored.unlink(missing_ok=True)
+        nonpayment_page.unlink(missing_ok=True)
         return 'Host deleted from nginx; a configuration backup was saved'
 
     def traffic_top(self, limit=5, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):

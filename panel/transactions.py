@@ -113,6 +113,16 @@ def nonpayment_backup_path(state, identifier):
     return Path(state) / 'nonpayment' / f'{digest}.original'
 
 
+def nonpayment_page_path(root, identifier):
+    digest = hashlib.sha256(identifier.encode('utf-8')).hexdigest()
+    return Path(root) / f'.smallnginxcontrol-nonpayment-{digest}.html'
+
+
+def write_nonpayment_page(path, content):
+    atomic_write(path, content)
+    os.chmod(path, 0o644)
+
+
 def is_allowed_log_path(candidate, roots):
     if not isinstance(candidate, str) or not candidate or '$' in candidate or any(ord(char) < 32 for char in candidate):
         return False
@@ -684,7 +694,7 @@ def _server_closings(masked, proxy_only=False):
     return closings
 
 
-def render_nonpayment_config(content, contact_text):
+def render_nonpayment_config(content, contact_text, page_path):
     text = content.decode('utf-8') if isinstance(content, bytes) else content
     if is_nonpayment_config(text):
         raise OperationError('Конфигурация уже отключена из-за неоплаты.')
@@ -692,6 +702,10 @@ def render_nonpayment_config(content, contact_text):
         raise OperationError('Сначала восстановите обычный режим обслуживания.')
     if not isinstance(contact_text, str) or not contact_text.strip() or len(contact_text) > 500:
         raise OperationError('Текст для связи должен содержать от 1 до 500 символов.')
+    page_path = Path(page_path)
+    page_path_text = page_path.as_posix()
+    if not page_path.is_absolute() or not re.fullmatch(r'(?:[A-Za-z]:)?/[A-Za-z0-9_./-]+', page_path_text) or '..' in page_path.parts:
+        raise OperationError('Недопустимый путь к странице отключения.')
     masked = _nginx_mask(text)
     closings = _server_closings(masked)
     if not closings:
@@ -767,31 +781,31 @@ def render_nonpayment_config(content, contact_text):
         '<span class="header-label">Инженерия с человеческим контролем</span></header><main>'
         '<section class="copy"><p class="eyebrow">Ограничение доступа</p>'
         '<h1>Доступ к сайту приостановлен</h1>'
-        '<p class="lead">Домен <strong>$host</strong> отключён по причине неоплаты. После урегулирования оплаты доступ будет восстановлен.</p>'
+        '<p class="lead">Домен или сайт отключён по причине неоплаты. После урегулирования оплаты доступ будет восстановлен.</p>'
         '<p class="actions">Сайт временно не обслуживается.</p></section>'
         '<aside class="status-panel"><div class="panel-top"><span>Account monitor / 01</span>'
         '<span class="status-light">Доступ ограничен</span></div><div class="status-display">'
         '<p class="status-code">ОТКЛЮЧЁН</p><span class="status-description">Блокировка по неоплате</span>'
-        '</div><div class="panel-bottom"><span>Домен</span><strong>$host</strong></div></aside></main>'
+        '</div><div class="panel-bottom"><span>Статус сайта</span><strong>НЕОПЛАТА</strong></div></aside></main>'
         '<section class="quote-row"><p class="quote-label">Связь с администратором</p>'
         '<div class="contact">' + html.escape(contact_text.strip()).replace('$', '&#36;').replace('\n', '&#10;') + '</div>'
         '</section><footer><span>FOCUSLENS.DEV · © 2026</span><span>Время — наша валюта. Прозрачность — гарантия.</span></footer>'
         '</div></body></html>'
-    ).replace('\\', '\\\\').replace("'", "\\'")
+    ).encode('utf-8')
     block = (
         f'\n        {NONPAYMENT_MARKER}: begin\n'
         f'        error_page 503 {NONPAYMENT_URI};\n'
         f'        location = {NONPAYMENT_URI} {{\n'
         f'            internal;\n'
         f'            default_type text/html;\n'
-        f"            return 200 '{page}';\n"
+        f'            alias {page_path_text};\n'
         f'        }}\n'
         f'        if ($uri != {NONPAYMENT_URI}) {{ return 503; }}\n'
         f'        {NONPAYMENT_MARKER}: end\n'
     )
     for closing in reversed(closings):
         text = text[:closing] + block + text[closing:]
-    return text.encode('utf-8')
+    return text.encode('utf-8'), page
 
 
 def has_proxy_server(content):

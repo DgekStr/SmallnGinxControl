@@ -1,3 +1,4 @@
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -5,7 +6,7 @@ from unittest.mock import patch
 from django.test import SimpleTestCase, override_settings
 
 from .nginx import NginxManager, describe_configuration
-from .transactions import OperationError, nonpayment_backup_path, render_maintenance_config
+from .transactions import OperationError, nonpayment_backup_path, nonpayment_page_path, render_maintenance_config
 
 
 class NginxTests(SimpleTestCase):
@@ -57,23 +58,29 @@ class NginxTests(SimpleTestCase):
 
                 suspended = next(item for item in self.manager.inventory()['items'] if item['name'] == name)
                 content = self.manager.read(item['id'])['content']
+                page_path = nonpayment_page_path(self.maintenance_root, item['id'])
+                page = page_path.read_text(encoding='utf-8')
                 self.assertFalse(suspended['enabled'])
                 self.assertFalse(suspended['maintenance'])
                 self.assertTrue(suspended['nonpayment'])
-                self.assertIn('отключён по причине неоплаты', content)
-                self.assertIn('Свяжитесь с администратором хостинга', content)
-                self.assertIn('$host', content)
+                self.assertIn('отключён по причине неоплаты', page)
+                self.assertIn('Свяжитесь с администратором хостинга', page)
+                self.assertNotIn('$host', page)
                 self.assertIn('error_page 503 /__smallnginxcontrol_nonpayment.html;', content)
-                self.assertIn('ОТКЛЮЧЁН', content)
-                self.assertNotIn('Service temporarily unavailable', content)
+                self.assertIn('ОТКЛЮЧЁН', page)
+                self.assertNotIn('Service temporarily unavailable', page)
+                self.assertIn(f'alias {page_path.as_posix()};', content)
+                self.assertLess(len(content.encode()), 4096)
                 self.assertNotIn('/maitenance.html', content)
                 stored = nonpayment_backup_path(self.manager.state, item['id'])
                 self.assertTrue(stored.is_file())
+                if os.name == 'posix':
+                    self.assertEqual(page_path.stat().st_mode & 0o777, 0o644)
                 with self.assertRaisesRegex(OperationError, 'переключателем оплаты'):
                     self.manager.save(item['id'], original.decode(), suspended['revision'])
 
                 self.manager.update_nonpayment_contact('Новый контакт')
-                self.assertIn('Новый контакт', self.manager.read(item['id'])['content'])
+                self.assertIn('Новый контакт', page_path.read_text(encoding='utf-8'))
                 updated_item = next(item for item in self.manager.inventory()['items'] if item['name'] == name)
                 self.manager.toggle_nonpayment(item['id'], False, updated_item['revision'], 'Новый контакт')
                 restored = next(item for item in self.manager.inventory()['items'] if item['name'] == name)
@@ -81,6 +88,7 @@ class NginxTests(SimpleTestCase):
                 self.assertFalse(restored['nonpayment'])
                 self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
                 self.assertFalse(stored.exists())
+                self.assertFalse(page_path.exists())
 
     def test_management_proxy_cannot_be_edited_disabled_or_deleted(self):
         with override_settings(SNC_SERVER='192.0.2.15', SNC_PORT=7445):
@@ -116,6 +124,22 @@ class NginxTests(SimpleTestCase):
         updated_item = self.manager.inventory()['items'][0]
         self.manager.toggle_nonpayment(item['id'], False, updated_item['revision'], 'Свяжитесь с администратором хостинга')
         self.assertEqual(self.manager.read(item['id'])['content'].encode(), updated_original)
+
+    def test_nonpayment_sidecar_rolls_back_when_nginx_validation_fails(self):
+        self.manager.create({'name': 'rollback-unpaid.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        original = self.manager.read(item['id'])['content'].encode()
+        stored = nonpayment_backup_path(self.manager.state, item['id'])
+        page = nonpayment_page_path(self.maintenance_root, item['id'])
+
+        with patch.object(self.manager, 'validate', side_effect=OperationError('nginx -t failed')):
+            with self.assertRaisesRegex(OperationError, 'nginx -t failed'):
+                self.manager.toggle_nonpayment(item['id'], True, item['revision'], 'Свяжитесь с администратором хостинга')
+
+        self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
+        self.assertTrue(self.manager.inventory()['items'][0]['enabled'])
+        self.assertFalse(stored.exists())
+        self.assertFalse(page.exists())
 
     def test_inventory_names_real_domain_before_default_catchall(self):
         item = describe_configuration(

@@ -61,7 +61,7 @@ test('about page is the bottom service menu entry and explains license and billi
   await expect(page.locator('.sidebar-bottom [data-view="about"]')).toBeVisible();
   await page.locator('.sidebar-bottom [data-view="about"]').click();
   await expect(page.locator('#page-title')).toHaveText('О программе');
-  await expect(page.locator('#view-about')).toContainText('1.0.4');
+  await expect(page.locator('#view-about')).toContainText('1.0.5');
   await expect(page.locator('#view-about')).toContainText('распространяется бесплатно');
   await expect(page.locator('#view-about')).toContainText('клиентский биллинг');
   await expect(page.locator('#view-about a[href="https://github.com/DgekStr/SmallnGinxControl"]')).toBeVisible();
@@ -100,8 +100,8 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   await page.locator('#confirm-accept').click();
   await expect(row).toContainText('Отключён: неоплата');
   await row.locator('[data-action="edit"]').click();
-  await expect(page.locator('#host-config')).toHaveValue(/отключён по причине неоплаты/);
-  await expect(page.locator('#host-config')).toHaveValue(/Свяжитесь с администратором хостинга/);
+  await expect(page.locator('#host-config')).toHaveValue(/alias .*smallnginxcontrol-nonpayment/);
+  await expect(page.locator('#host-config')).not.toHaveValue(/<!doctype html/i);
   await page.locator('#editor-dialog .modal-heading [data-close="editor-dialog"]').click();
   await row.locator('[data-action="nonpayment"]').click();
   await expect(page.locator('#confirm-accept')).toHaveText('Восстановить');
