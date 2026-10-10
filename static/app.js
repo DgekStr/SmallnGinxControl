@@ -9,6 +9,7 @@ const time = (value) => new Date(value).toLocaleTimeString('ru-RU', {hour: '2-di
 const state = {view: '', hosts: [], filter: 'all', search: '', logKind: 'access', overview: null, trafficTop: [], trafficFetchedAt: 0, config: null, editor: null, charts: {}, busy: false, polling: false, logContent: '', logSources: []};
 let twoFactorEnabled = false;
 let trafficBlocked = false;
+let mattermostWebhookConfigured = false;
 Object.assign(state, {servers: [], serverId: sessionStorage.getItem('snc-server') || 'local', serverRevision: null, generation: 0, switching: false, serverReady: false, inventoryLoaded: false, editingServer: null});
 const titles = {
   servers: ['Серверы nginx', 'NGINX / SERVER CONNECTIONS', 'Серверы'],
@@ -349,6 +350,75 @@ function renderTrafficTop(result) {
   }).join('');
 }
 
+function ensureMattermostWebhookForm() {
+  if (query('#mattermost-webhook-form')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section mattermost-webhook-section';
+  section.innerHTML = '<div class="section-heading"><h2>Уведомления Mattermost</h2><i data-lucide="message-square-text"></i></div><form id="mattermost-webhook-form"><label>Incoming webhook URL<input id="mattermost-webhook-url" name="mattermost_webhook_url" type="password" autocomplete="new-password" maxlength="2048" placeholder="https://mattermost.example/hooks/…"></label><p id="mattermost-webhook-status" class="muted small"></p><div id="mattermost-webhook-result" class="operation-result" hidden></div><div class="panel-tls-actions"><button class="button primary" type="submit"><i data-lucide="save"></i>Сохранить</button><button class="button" id="mattermost-webhook-test" type="button"><i data-lucide="send"></i>Проверить</button></div></form>';
+  query('#view-settings .settings-layout').append(section);
+  section.querySelector('#mattermost-webhook-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const webhookUrl = query('#mattermost-webhook-url').value.trim();
+      if (!webhookUrl) {
+        showResult('#mattermost-webhook-result', mattermostWebhookConfigured ? 'Сохранённый webhook не изменён.' : 'Введите URL Mattermost webhook.');
+        return;
+      }
+      const result = await request('settings', {mattermost_webhook_url: webhookUrl});
+      query('#mattermost-webhook-url').value = '';
+      await refreshMattermostWebhookSettings();
+      showResult('#mattermost-webhook-result', result.message, true);
+    }, '#mattermost-webhook-result');
+  });
+  section.querySelector('#mattermost-webhook-test').addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+    const result = await request('settings', {action: 'test_mattermost_webhook', mattermost_webhook_url: query('#mattermost-webhook-url').value.trim()});
+    showResult('#mattermost-webhook-result', result.message, true);
+  }, '#mattermost-webhook-result'));
+  icons();
+}
+
+async function refreshMattermostWebhookSettings() {
+  ensureMattermostWebhookForm();
+  const result = await request('settings');
+  mattermostWebhookConfigured = result.mattermost_webhook_configured;
+  query('#mattermost-webhook-url').value = '';
+  query('#mattermost-webhook-status').textContent = mattermostWebhookConfigured ? 'Webhook сохранён. Введите новый URL только для замены.' : 'Webhook не настроен.';
+  query('#mattermost-webhook-result').hidden = true;
+}
+
+function ensureDomainExpirySchedulerForm() {
+  if (query('#domain-expiry-scheduler-form')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section domain-expiry-scheduler-section';
+  section.innerHTML = '<div class="section-heading"><h2>Проверка доменов</h2><i data-lucide="calendar-clock"></i></div><form id="domain-expiry-scheduler-form"><label class="check-label"><input id="domain-expiry-scheduler-enabled" name="domain_expiry_scheduler_enabled" type="checkbox">Включить scheduler</label><label>Проверять каждые, дней<input id="domain-expiry-interval-days" name="domain_expiry_interval_days" type="number" min="1" max="365" step="1" required></label><label>Время отправки уведомлений<input id="domain-expiry-send-time" name="domain_expiry_send_time" type="time" required></label><p class="muted small">При первом запуске проверяются домены всех профилей. Mattermost получает список доменов со сроком регистрации менее 10 дней, не чаще одного раза в сутки для каждого домена.</p><div id="domain-expiry-scheduler-result" class="operation-result" hidden></div><button class="button primary" type="submit"><i data-lucide="save"></i>Сохранить расписание</button></form>';
+  query('#view-settings .settings-layout').append(section);
+  section.querySelector('#domain-expiry-scheduler-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const result = await request('settings', {
+        domain_expiry_scheduler_enabled: query('#domain-expiry-scheduler-enabled').checked,
+        domain_expiry_interval_days: Number(query('#domain-expiry-interval-days').value),
+        domain_expiry_send_time: query('#domain-expiry-send-time').value,
+      });
+      await refreshDomainExpirySchedulerSettings();
+      showResult('#domain-expiry-scheduler-result', result.message, true);
+    }, '#domain-expiry-scheduler-result');
+  });
+  icons();
+}
+
+async function refreshDomainExpirySchedulerSettings() {
+  ensureDomainExpirySchedulerForm();
+  const result = await request('settings');
+  query('#domain-expiry-scheduler-enabled').checked = result.domain_expiry_scheduler_enabled;
+  query('#domain-expiry-interval-days').value = result.domain_expiry_interval_days;
+  query('#domain-expiry-send-time').value = result.domain_expiry_send_time;
+  const readOnly = document.body.dataset.mode === 'demo';
+  query('#domain-expiry-scheduler-enabled').disabled = readOnly;
+  query('#domain-expiry-scheduler-form button[type="submit"]').disabled = readOnly;
+  query('#domain-expiry-scheduler-result').hidden = true;
+}
+
 function ensureAccessLogSampleForm() {
   if (query('#access-log-sample-form')) return;
   const section = document.createElement('section');
@@ -659,11 +729,13 @@ async function route() {
       await refreshTwoFactorSettings();
       await refreshSessionTimeoutSettings();
       await refreshLogRetentionSettings();
+      await refreshMattermostWebhookSettings();
+      await refreshDomainExpirySchedulerSettings();
       await refreshAccessLogSampleSettings();
       await refreshTrafficMaintenanceSettings();
       await refreshPanelTlsSettings();
       const layout = query('#view-settings .settings-layout');
-      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.access-log-sample-section'), query('.panel-tls-section'));
+      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.mattermost-webhook-section'), query('.domain-expiry-scheduler-section'), query('.access-log-sample-section'), query('.panel-tls-section'));
     }
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }
@@ -719,7 +791,7 @@ async function loadConfig() {
 
 async function loadAudit() {
   const response = await request('audit');
-  const names = {login: 'Вход', logout: 'Выход', password_change: 'Смена пароля', settings_update: 'Изменение настроек', panel_tls_renew: 'Перевыпуск TLS-сертификата', panel_tls_replace: 'Замена TLS-сертификата', save_config: 'Изменение конфигурации', create: 'Создание хоста', toggle: 'Переключение хоста', reload: 'Применение nginx', restart: 'Перезапуск nginx', test: 'Проверка nginx', demo_initialized: 'Инициализация демо'};
+  const names = {login: 'Вход', logout: 'Выход', password_change: 'Смена пароля', settings_update: 'Изменение настроек', mattermost_webhook_test: 'Проверка Mattermost webhook', panel_tls_renew: 'Перевыпуск TLS-сертификата', panel_tls_replace: 'Замена TLS-сертификата', save_config: 'Изменение конфигурации', create: 'Создание хоста', toggle: 'Переключение хоста', reload: 'Применение nginx', restart: 'Перезапуск nginx', test: 'Проверка nginx', demo_initialized: 'Инициализация демо'};
   Object.assign(names, {server_create: 'Добавление сервера', server_update: 'Изменение сервера', server_delete: 'Удаление подключения', server_test: 'Проверка соединения'});
   query('#audit-table').innerHTML = `<div class="table-scroll"><table class="data-table"><thead><tr><th>ВРЕМЯ</th><th>ПОЛЬЗОВАТЕЛЬ</th><th>ОПЕРАЦИЯ</th><th>ОБЪЕКТ</th><th>РЕЗУЛЬТАТ</th></tr></thead><tbody>${response.events.map((event) => `<tr><td class="mono muted">${escapeHtml(new Date(event.created_at).toLocaleString('ru-RU'))}</td><td>${escapeHtml(event.actor)}</td><td class="audit-action">${escapeHtml(names[event.action] || event.action)}</td><td class="audit-target" title="${escapeHtml(event.target)}">${escapeHtml(event.target || '—')}${event.detail ? `<div class="audit-detail">${escapeHtml(event.detail)}</div>` : ''}</td><td><span class="badge ${event.success ? 'success' : 'error'}">${event.success ? 'Выполнено' : 'Ошибка'}</span></td></tr>`).join('') || '<tr><td colspan="5" class="empty-state">История пуста.</td></tr>'}</tbody></table></div>`;
 }

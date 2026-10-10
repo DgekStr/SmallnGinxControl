@@ -141,6 +141,53 @@ class AuthenticationTests(TestCase):
                 response = self.client.post('/api/settings/', {'access_log_sample_bytes': invalid}, content_type='application/json')
                 self.assertEqual(response.status_code, 400)
 
+    def test_mattermost_webhook_is_encrypted_and_never_returned_by_settings_api(self):
+        self.client.force_login(self.user)
+        webhook_url = 'https://mattermost.example/hooks/private-token'
+
+        response = self.client.post('/api/settings/', {'mattermost_webhook_url': webhook_url}, content_type='application/json')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        service_settings = ServiceSetting.get_solo()
+        self.assertNotEqual(service_settings.encrypted_mattermost_webhook_url, webhook_url)
+        self.assertEqual(service_settings.get_mattermost_webhook_url(), webhook_url)
+        settings_response = self.client.get('/api/settings/')
+        self.assertTrue(settings_response.json()['mattermost_webhook_configured'])
+        self.assertNotIn('mattermost_webhook_url', settings_response.json())
+        self.assertNotIn(webhook_url, settings_response.content.decode())
+
+    @patch('panel.views.send_webhook_message')
+    def test_mattermost_test_action_sends_without_saving_unsaved_url(self, send):
+        self.client.force_login(self.user)
+        webhook_url = 'https://mattermost.example/hooks/test-token'
+
+        response = self.client.post('/api/settings/', {'action': 'test_mattermost_webhook', 'mattermost_webhook_url': webhook_url}, content_type='application/json')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        send.assert_called_once_with(webhook_url, 'Проверочное сообщение от SmallnGinxControl.')
+        self.assertFalse(ServiceSetting.get_solo().encrypted_mattermost_webhook_url)
+
+    @override_settings(SNC_MODE='local')
+    def test_domain_expiry_scheduler_requires_webhook_and_validates_schedule(self):
+        self.client.force_login(self.user)
+        response = self.client.post('/api/settings/', {'domain_expiry_scheduler_enabled': True}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post('/api/settings/', {
+            'mattermost_webhook_url': 'https://mattermost.example/hooks/token',
+            'domain_expiry_scheduler_enabled': True,
+            'domain_expiry_interval_days': 7,
+            'domain_expiry_send_time': '08:30',
+        }, content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        service_settings = ServiceSetting.get_solo()
+        self.assertTrue(service_settings.domain_expiry_scheduler_enabled)
+        self.assertEqual(service_settings.domain_expiry_interval_days, 7)
+        self.assertEqual(service_settings.domain_expiry_send_time.strftime('%H:%M'), '08:30')
+
+        response = self.client.post('/api/settings/', {'domain_expiry_interval_days': 366}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+
     def test_traffic_maintenance_path_and_state_are_server_scoped(self):
         self.client.force_login(self.user)
         server = Server.objects.get(pk='local')

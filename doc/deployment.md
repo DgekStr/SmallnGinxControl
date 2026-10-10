@@ -84,6 +84,10 @@ set +a
 systemctl restart smallnginxcontrol
 systemctl is-active smallnginxcontrol
 systemctl enable --now smallnginxcontrol-log-cleanup.timer
+install -o root -g root -m 0644 deploy/smallnginxcontrol-domain-expiry.service /etc/systemd/system/smallnginxcontrol-domain-expiry.service
+install -o root -g root -m 0644 deploy/smallnginxcontrol-domain-expiry.timer /etc/systemd/system/smallnginxcontrol-domain-expiry.timer
+systemctl daemon-reload
+systemctl enable --now smallnginxcontrol-domain-expiry.timer
 ```
 
 Для существующей установки до TLS frontend не запускайте fresh `install.sh`: он откажется перезаписывать systemd/env. После fast-forward обновления кода и `pip install`, сделайте одноразовый переход, сохранив env вне репозитория:

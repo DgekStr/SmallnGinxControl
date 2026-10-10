@@ -415,10 +415,45 @@ test('access-log TOP-5 sample size is configurable up to 100 MB', async ({page})
     await page.locator('[data-view="settings"]').click();
     expect(Number(await sampleSize.inputValue())).toBeCloseTo(1.5, 6);
   } finally {
+    await page.locator('#access-log-sample-result').evaluate((element) => { element.hidden = true; element.textContent = ''; });
     await sampleSize.fill('0.131072');
     await page.locator('#access-log-sample-form button[type="submit"]').click();
+    await expect(page.locator('#access-log-sample-result')).toBeVisible();
     await expect(page.locator('#access-log-sample-result')).toContainText('Настройки сохранены');
+    await expect(page.locator('#access-log-sample-form button[type="submit"]')).toBeEnabled();
   }
+});
+
+test('Mattermost and domain scheduler settings render before the traffic sample controls', async ({page}) => {
+  await login(page);
+  const posts = [];
+  await page.route('**/api/settings/**', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const payload = route.request().postDataJSON();
+    posts.push(payload);
+    const message = payload.action === 'test_mattermost_webhook' ? 'Проверочное сообщение отправлено.' : 'Настройки сохранены.';
+    await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({ok: true, message})});
+  });
+  await page.locator('[data-view="settings"]').click();
+  const orderedSections = page.locator('.mattermost-webhook-section, .domain-expiry-scheduler-section, .access-log-sample-section');
+  await expect(orderedSections).toHaveCount(3);
+  const topPositions = await orderedSections.evaluateAll((sections) => sections.map((section) => section.getBoundingClientRect().top));
+  expect(topPositions[0]).toBeLessThan(topPositions[2]);
+  expect(topPositions[1]).toBeLessThan(topPositions[2]);
+  await expect(page.locator('#mattermost-webhook-url')).toHaveAttribute('type', 'password');
+  await expect(page.locator('#domain-expiry-scheduler-enabled')).toBeDisabled();
+  await expect(page.locator('#domain-expiry-interval-days')).toHaveValue('1');
+  await expect(page.locator('#domain-expiry-send-time')).toHaveValue('09:00');
+
+  await page.locator('#mattermost-webhook-url').fill('https://mattermost.example/hooks/test-token');
+  await page.locator('#mattermost-webhook-test').click();
+  await expect(page.locator('#mattermost-webhook-result')).toContainText('Проверочное сообщение отправлено');
+  await page.locator('#mattermost-webhook-form button[type="submit"]').click();
+  await expect(page.locator('#mattermost-webhook-result')).toContainText('Настройки сохранены');
+  expect(posts).toEqual([
+    {action: 'test_mattermost_webhook', mattermost_webhook_url: 'https://mattermost.example/hooks/test-token'},
+    {mattermost_webhook_url: 'https://mattermost.example/hooks/test-token'},
+  ]);
 });
 
 test('switching server clears previous SSD usage while new metrics load', async ({page}) => {
@@ -435,8 +470,8 @@ test('switching server clears previous SSD usage while new metrics load', async 
 test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
-  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(6);
-  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'TOP-5 по трафику', 'HTTPS панели']);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(8);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Проверка доменов', 'TOP-5 по трафику', 'HTTPS панели']);
   await expect(page.locator('#panel-tls-status')).toHaveText('Только production');
   await expect(page.locator('#panel-tls-renew')).toBeDisabled();
   await expect(page.locator('#panel-tls-download')).toBeDisabled();

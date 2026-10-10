@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import portalocker
 from django.conf import settings
@@ -18,6 +18,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .metrics import snapshot
+from .mattermost import send_webhook_message, validate_webhook_url
 from .models import AuditEvent, LoginAttempt, MetricSample, Server, ServiceSetting, TwoFactorCredential
 from .panel_tls import MAX_PEM_BYTES, panel_certificate_path, panel_tls_status, renew_panel_certificate, replace_panel_certificate
 from .domain_expiry import enrich_inventory_domains
@@ -198,7 +199,15 @@ def api(request, resource):
                 return JsonResponse({'enabled': bool(credential and credential.enabled)})
             if resource == 'settings':
                 service_settings = ServiceSetting.get_solo()
-                return JsonResponse({'log_retention_days': service_settings.log_retention_days, 'session_timeout_hours': service_settings.session_timeout_hours, 'access_log_sample_bytes': service_settings.access_log_sample_bytes})
+                return JsonResponse({
+                    'log_retention_days': service_settings.log_retention_days,
+                    'session_timeout_hours': service_settings.session_timeout_hours,
+                    'access_log_sample_bytes': service_settings.access_log_sample_bytes,
+                    'mattermost_webhook_configured': bool(service_settings.encrypted_mattermost_webhook_url),
+                    'domain_expiry_scheduler_enabled': service_settings.domain_expiry_scheduler_enabled,
+                    'domain_expiry_interval_days': service_settings.domain_expiry_interval_days,
+                    'domain_expiry_send_time': service_settings.domain_expiry_send_time.strftime('%H:%M'),
+                })
             if resource == 'panel-tls':
                 return JsonResponse(panel_tls_status())
             if resource == 'panel-tls-download':
@@ -342,8 +351,21 @@ def api(request, resource):
             update_session_auth_hash(request, user)
             result = 'Пароль изменён.'
         elif resource == 'settings':
-            action = 'settings_update'
             service_settings = ServiceSetting.get_solo()
+            if data.get('action') == 'test_mattermost_webhook':
+                action = 'mattermost_webhook_test'
+                target = 'mattermost'
+                webhook_url = data.get('mattermost_webhook_url', '')
+                if not isinstance(webhook_url, str):
+                    raise OperationError('URL webhook должен быть текстом.')
+                webhook_url = webhook_url.strip() or service_settings.get_mattermost_webhook_url()
+                if not webhook_url:
+                    raise OperationError('Сначала укажите URL Mattermost webhook.')
+                send_webhook_message(webhook_url, 'Проверочное сообщение от SmallnGinxControl.')
+                result = 'Проверочное сообщение отправлено.'
+                record(request, action, target)
+                return JsonResponse({'ok': True, 'message': result})
+            action = 'settings_update'
             updated_fields = []
             if 'log_retention_days' in data:
                 retention_days = data['log_retention_days']
@@ -363,9 +385,57 @@ def api(request, resource):
                     raise OperationError('Размер выборки access log должен быть целым числом от 1 байта до 100 МБ.')
                 service_settings.access_log_sample_bytes = sample_size
                 updated_fields.append('access_log_sample_bytes')
+            if 'mattermost_webhook_url' in data:
+                webhook_url = data['mattermost_webhook_url']
+                if not isinstance(webhook_url, str):
+                    raise OperationError('URL webhook должен быть текстом.')
+                webhook_url = webhook_url.strip()
+                if webhook_url:
+                    service_settings.set_mattermost_webhook_url(validate_webhook_url(webhook_url))
+                    updated_fields.append('encrypted_mattermost_webhook_url')
+            if 'clear_mattermost_webhook' in data:
+                clear_webhook = data['clear_mattermost_webhook']
+                if type(clear_webhook) is not bool:
+                    raise OperationError('Состояние удаления webhook должно быть true или false.')
+                if clear_webhook:
+                    service_settings.set_mattermost_webhook_url('')
+                    updated_fields.append('encrypted_mattermost_webhook_url')
+            if 'domain_expiry_scheduler_enabled' in data:
+                scheduler_enabled = data['domain_expiry_scheduler_enabled']
+                if type(scheduler_enabled) is not bool:
+                    raise OperationError('Состояние scheduler должно быть true или false.')
+                if scheduler_enabled and settings.SNC_MODE == 'demo':
+                    raise OperationError('Scheduler проверки доменов доступен только в рабочем режиме.')
+                if scheduler_enabled != service_settings.domain_expiry_scheduler_enabled:
+                    service_settings.domain_expiry_scheduler_enabled = scheduler_enabled
+                    service_settings.domain_expiry_last_check_at = None
+                    updated_fields.extend(['domain_expiry_scheduler_enabled', 'domain_expiry_last_check_at'])
+            if 'domain_expiry_interval_days' in data:
+                interval_days = data['domain_expiry_interval_days']
+                if type(interval_days) is not int or not 1 <= interval_days <= 365:
+                    raise OperationError('Интервал проверки доменов должен быть от 1 до 365 дней.')
+                if interval_days != service_settings.domain_expiry_interval_days:
+                    service_settings.domain_expiry_interval_days = interval_days
+                    service_settings.domain_expiry_last_check_at = None
+                    updated_fields.extend(['domain_expiry_interval_days', 'domain_expiry_last_check_at'])
+            if 'domain_expiry_send_time' in data:
+                send_time_value = data['domain_expiry_send_time']
+                if not isinstance(send_time_value, str):
+                    raise OperationError('Укажите время отправки в формате ЧЧ:ММ.')
+                try:
+                    send_time = datetime.strptime(send_time_value, '%H:%M').time()
+                except ValueError as error:
+                    raise OperationError('Укажите время отправки в формате ЧЧ:ММ.') from error
+                if send_time.strftime('%H:%M') != send_time_value:
+                    raise OperationError('Укажите время отправки в формате ЧЧ:ММ.')
+                if send_time != service_settings.domain_expiry_send_time:
+                    service_settings.domain_expiry_send_time = send_time
+                    updated_fields.append('domain_expiry_send_time')
+            if service_settings.domain_expiry_scheduler_enabled and not service_settings.encrypted_mattermost_webhook_url:
+                raise OperationError('Для включения проверки доменов сначала сохраните Mattermost webhook.')
             if not updated_fields:
                 raise OperationError('Укажите настройку для сохранения.')
-            service_settings.save(update_fields=[*updated_fields, 'updated_at'])
+            service_settings.save(update_fields=[*dict.fromkeys(updated_fields), 'updated_at'])
             if 'session_timeout_hours' in updated_fields:
                 request.session.set_expiry(service_settings.session_timeout_hours * 3600)
             target = ','.join(updated_fields)

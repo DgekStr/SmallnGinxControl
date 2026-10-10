@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh SmallnGinxControl domain expiries and send Mattermost alerts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/smallnginxcontrol
+EnvironmentFile=/etc/smallnginxcontrol.env
+ExecStart=/opt/smallnginxcontrol/.venv/bin/python /opt/smallnginxcontrol/manage.py run_domain_expiry_scheduler
+UMask=0077

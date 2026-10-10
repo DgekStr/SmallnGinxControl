@@ -1,11 +1,11 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.db import OperationalError
 
-from .domain_expiry import CHECK_INTERVAL, STALE_CHECKING_AFTER, enrich_inventory_domains, parse_expiration, registrable_domain, schedule_due_checks
-from .models import DomainExpiry
+from .domain_expiry import CHECK_INTERVAL, STALE_CHECKING_AFTER, enrich_inventory_domains, parse_expiration, registrable_domain, run_expiry_scheduler, schedule_due_checks
+from .models import DomainExpiry, ServiceSetting
 
 
 class RegistrableDomainTests(SimpleTestCase):
@@ -27,9 +27,10 @@ class RegistrableDomainTests(SimpleTestCase):
 
 class DomainExpiryCacheTests(TestCase):
     def tearDown(self):
-        from .domain_expiry import _in_flight, _in_flight_lock
+        from .domain_expiry import _in_flight, _in_flight_futures, _in_flight_lock
         with _in_flight_lock:
             _in_flight.clear()
+            _in_flight_futures.clear()
 
     @override_settings(SNC_MODE='local')
     @patch('panel.domain_expiry.schedule_due_checks', return_value=[])
@@ -97,3 +98,57 @@ class DomainExpiryCacheTests(TestCase):
 
         self.assertEqual(enriched[0]['name'], 'shop.example.com')
         self.assertEqual(enriched[0]['domain_expiry'], [])
+
+
+class DomainExpirySchedulerTests(TestCase):
+    def setUp(self):
+        self.service_settings = ServiceSetting.get_solo()
+        self.service_settings.set_mattermost_webhook_url('https://mattermost.example/hooks/test-token')
+        self.service_settings.domain_expiry_scheduler_enabled = True
+        self.service_settings.domain_expiry_send_time = time(9, 0)
+        self.service_settings.save()
+
+    @patch('panel.mattermost.send_webhook_message')
+    @patch('panel.domain_expiry.schedule_due_checks')
+    @patch('panel.domain_expiry.collect_configured_domains', return_value=({'example.com'}, True))
+    def test_first_run_checks_all_domains_and_notifies_once_per_24_hours(self, collect, schedule, send):
+        fixed_now = datetime(2026, 10, 10, 10, tzinfo=timezone.utc)
+
+        def complete_check(domains, *, force=False):
+            for domain in domains:
+                DomainExpiry.objects.update_or_create(
+                    domain=domain,
+                    defaults={'expires_on': date(2026, 10, 17), 'checked_at': fixed_now, 'status': 'ready'},
+                )
+            return []
+
+        schedule.side_effect = complete_check
+        with patch('panel.domain_expiry.timezone.now', return_value=fixed_now), patch('panel.domain_expiry.timezone.localtime', return_value=fixed_now):
+            result = run_expiry_scheduler()
+            self.assertEqual(result, {'checked': 1, 'notified': 1})
+            self.assertEqual(run_expiry_scheduler(), {'checked': 0, 'notified': 0})
+
+        collect.assert_called_once_with()
+        schedule.assert_called_once_with({'example.com'}, force=True)
+        send.assert_called_once()
+        self.assertIn('example.com', send.call_args.args[1])
+
+        DomainExpiry.objects.filter(pk='example.com').update(last_notified_at=fixed_now - timedelta(days=1, seconds=1))
+        with patch('panel.domain_expiry.timezone.now', return_value=fixed_now), patch('panel.domain_expiry.timezone.localtime', return_value=fixed_now):
+            self.assertEqual(run_expiry_scheduler(), {'checked': 0, 'notified': 1})
+        self.assertEqual(send.call_count, 2)
+
+    def test_scheduler_interval_controls_normal_domain_cache_refresh(self):
+        self.service_settings.domain_expiry_interval_days = 7
+        self.service_settings.save()
+        DomainExpiry.objects.create(
+            domain='example.com',
+            expires_on=date(2027, 1, 1),
+            checked_at=datetime.now(timezone.utc) - timedelta(days=2),
+            status='ready',
+        )
+
+        with patch('panel.domain_expiry._executor.submit') as submit:
+            self.assertEqual(schedule_due_checks(['example.com']), [])
+
+        submit.assert_not_called()

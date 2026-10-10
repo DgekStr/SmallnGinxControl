@@ -13,6 +13,8 @@ ENV_FILE=/etc/smallnginxcontrol.env
 SERVICE_FILE=/etc/systemd/system/smallnginxcontrol.service
 CLEANUP_SERVICE_FILE=/etc/systemd/system/smallnginxcontrol-log-cleanup.service
 CLEANUP_TIMER_FILE=/etc/systemd/system/smallnginxcontrol-log-cleanup.timer
+DOMAIN_EXPIRY_SERVICE_FILE=/etc/systemd/system/smallnginxcontrol-domain-expiry.service
+DOMAIN_EXPIRY_TIMER_FILE=/etc/systemd/system/smallnginxcontrol-domain-expiry.timer
 STATE_DIR=/var/lib/smallnginxcontrol
 PANEL_TLS_CONFIG_FILE=/etc/nginx/conf.d/smallnginxcontrol-panel.conf
 PANEL_TLS_CONFIG_CREATED=0
@@ -36,7 +38,7 @@ done
 if (( ! PANEL_WELCOME_ENABLED )); then
     echo 'Existing /var/www/html content detected; leaving the current HTTP welcome page unchanged.'
 fi
-if [[ -e $ENV_FILE || -e $SERVICE_FILE || -e $CLEANUP_SERVICE_FILE || -e $CLEANUP_TIMER_FILE ]]; then
+if [[ -e $ENV_FILE || -e $SERVICE_FILE || -e $CLEANUP_SERVICE_FILE || -e $CLEANUP_TIMER_FILE || -e $DOMAIN_EXPIRY_SERVICE_FILE || -e $DOMAIN_EXPIRY_TIMER_FILE ]]; then
     echo 'Service configuration already exists; refusing to overwrite it.' >&2
     exit 1
 fi
@@ -58,6 +60,7 @@ cleanup_failed_install() {
         echo 'Installation failed; removing generated service configuration. State data was preserved.' >&2
         systemctl disable --now smallnginxcontrol >/dev/null 2>&1 || true
         systemctl disable --now smallnginxcontrol-log-cleanup.timer >/dev/null 2>&1 || true
+        systemctl disable --now smallnginxcontrol-domain-expiry.timer >/dev/null 2>&1 || true
         if (( PANEL_TLS_CONFIG_CREATED )); then
             rm -f "$PANEL_TLS_CONFIG_FILE"
             systemctl reload nginx >/dev/null 2>&1 || true
@@ -65,7 +68,7 @@ cleanup_failed_install() {
         if (( PANEL_WELCOME_CREATED )); then
             rm -f "$PANEL_WELCOME_FILE" "$PANEL_WELCOME_BRAND_FILE" "$PANEL_WELCOME_LATIN_FONT" "$PANEL_WELCOME_CYRILLIC_FONT"
         fi
-        rm -f "$SERVICE_FILE" "$CLEANUP_SERVICE_FILE" "$CLEANUP_TIMER_FILE" "$ENV_FILE"
+        rm -f "$SERVICE_FILE" "$CLEANUP_SERVICE_FILE" "$CLEANUP_TIMER_FILE" "$DOMAIN_EXPIRY_SERVICE_FILE" "$DOMAIN_EXPIRY_TIMER_FILE" "$ENV_FILE"
         systemctl daemon-reload >/dev/null 2>&1 || true
     fi
     exit "$exit_code"
@@ -146,6 +149,11 @@ sed "s|/opt/smallnginxcontrol|$INSTALL_DIR|g" "$INSTALL_DIR/deploy/smallnginxcon
 install -o root -g root -m 0644 "$cleanup_service_temp" "$CLEANUP_SERVICE_FILE"
 rm -f "$cleanup_service_temp"
 install -o root -g root -m 0644 "$INSTALL_DIR/deploy/smallnginxcontrol-log-cleanup.timer" "$CLEANUP_TIMER_FILE"
+expiry_service_temp=$(mktemp)
+sed "s|/opt/smallnginxcontrol|$INSTALL_DIR|g" "$INSTALL_DIR/deploy/smallnginxcontrol-domain-expiry.service" > "$expiry_service_temp"
+install -o root -g root -m 0644 "$expiry_service_temp" "$DOMAIN_EXPIRY_SERVICE_FILE"
+rm -f "$expiry_service_temp"
+install -o root -g root -m 0644 "$INSTALL_DIR/deploy/smallnginxcontrol-domain-expiry.timer" "$DOMAIN_EXPIRY_TIMER_FILE"
 
 set -a
 . "$ENV_FILE"
@@ -191,6 +199,7 @@ fi
 systemctl daemon-reload
 systemctl enable --now smallnginxcontrol
 systemctl enable --now smallnginxcontrol-log-cleanup.timer
+systemctl enable --now smallnginxcontrol-domain-expiry.timer
 systemctl --no-pager --full status smallnginxcontrol
 
 printf '\nInstalled %s (%s).\n' "$INSTALL_DIR" "$RELEASE_TAG"

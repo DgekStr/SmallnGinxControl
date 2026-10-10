@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import uuid
+from datetime import time
 
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -115,7 +116,26 @@ class ServiceSetting(models.Model):
     log_retention_days = models.PositiveSmallIntegerField(default=30, validators=[MinValueValidator(1), MaxValueValidator(3650)])
     session_timeout_hours = models.PositiveSmallIntegerField(default=24, validators=[MinValueValidator(1), MaxValueValidator(720)])
     access_log_sample_bytes = models.PositiveIntegerField(default=ACCESS_LOG_SAMPLE_DEFAULT_BYTES, validators=[MinValueValidator(1), MaxValueValidator(ACCESS_LOG_SAMPLE_MAX_BYTES)])
+    encrypted_mattermost_webhook_url = models.TextField(blank=True)
+    domain_expiry_scheduler_enabled = models.BooleanField(default=False)
+    domain_expiry_interval_days = models.PositiveSmallIntegerField(default=1, validators=[MinValueValidator(1), MaxValueValidator(365)])
+    domain_expiry_send_time = models.TimeField(default=time(9, 0))
+    domain_expiry_last_check_at = models.DateTimeField(null=True, blank=True)
+    domain_expiry_monitored_domains = models.JSONField(default=list, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    @staticmethod
+    def webhook_cipher():
+        from cryptography.fernet import Fernet
+        key = hashlib.sha256(('snc-mattermost-webhook:' + settings.SECRET_KEY).encode()).digest()
+        return Fernet(base64.urlsafe_b64encode(key))
+
+    def get_mattermost_webhook_url(self):
+        encrypted = self.encrypted_mattermost_webhook_url
+        return self.webhook_cipher().decrypt(encrypted.encode()).decode() if encrypted else ''
+
+    def set_mattermost_webhook_url(self, value):
+        self.encrypted_mattermost_webhook_url = self.webhook_cipher().encrypt(value.encode()).decode() if value else ''
 
     @classmethod
     def get_solo(cls):
@@ -126,6 +146,7 @@ class DomainExpiry(models.Model):
     domain = models.CharField(max_length=253, primary_key=True)
     expires_on = models.DateField(null=True, blank=True)
     checked_at = models.DateTimeField(null=True, blank=True)
+    last_notified_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=16, default='pending', choices=[('pending', 'Pending'), ('checking', 'Checking'), ('ready', 'Ready'), ('unavailable', 'Unavailable')])
 
     class Meta:
