@@ -1,12 +1,21 @@
 import os
+import shutil
+import socket
+import subprocess
 import tempfile
+import unittest
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
 from .nginx import NginxManager, describe_configuration
-from .transactions import OperationError, nonpayment_backup_path, nonpayment_page_path, render_maintenance_config
+from .transactions import (
+    OperationError, nonpayment_backup_path, nonpayment_page_path,
+    render_maintenance_config, render_nonpayment_config, write_nonpayment_page,
+)
 
 
 class NginxTests(SimpleTestCase):
@@ -67,6 +76,10 @@ class NginxTests(SimpleTestCase):
                 self.assertIn('Свяжитесь с администратором хостинга', page)
                 self.assertNotIn('$host', page)
                 self.assertIn('error_page 503 /__smallnginxcontrol_nonpayment.html;', content)
+                self.assertLess(
+                    content.index('error_page 503 /__smallnginxcontrol_nonpayment.html;'),
+                    content.index('include '),
+                )
                 self.assertIn('ОТКЛЮЧЁН', page)
                 self.assertNotIn('Service temporarily unavailable', page)
                 self.assertIn(f'alias {page_path.as_posix()};', content)
@@ -140,6 +153,71 @@ class NginxTests(SimpleTestCase):
         self.assertTrue(self.manager.inventory()['items'][0]['enabled'])
         self.assertFalse(stored.exists())
         self.assertFalse(page.exists())
+
+    @unittest.skipUnless(os.name == 'posix' and shutil.which('nginx'), 'requires POSIX nginx')
+    def test_nonpayment_sidecar_precedes_shared_maintenance_handler(self):
+        nginx_bin = shutil.which('nginx')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            webroot = root / 'www'
+            webroot.mkdir()
+            maintenance_page = root / 'maitenance.html'
+            maintenance_page.write_text('generic maintenance fallback', encoding='utf-8')
+            snippet = root / 'maintenance_all.conf'
+            snippet.write_text(
+                'error_page 500 502 503 504 /maitenance.html;\n'
+                f'location = /maitenance.html {{ root {root.as_posix()}; internal; }}\n',
+                encoding='utf-8',
+            )
+            with socket.socket() as listener:
+                listener.bind(('127.0.0.1', 0))
+                port = listener.getsockname()[1]
+            original = (
+                'server {\n'
+                f'    listen 127.0.0.1:{port};\n'
+                '    server_name sidecar-test.invalid;\n'
+                f'    include {snippet.as_posix()};\n'
+                '    location / { return 200 "original"; }\n'
+                '}\n'
+            )
+            page_path = nonpayment_page_path(webroot, 'conf.d/sidecar-test.conf')
+            config, page = render_nonpayment_config(original, 'Свяжитесь с администратором', page_path)
+            page_path.parent.mkdir(parents=True, exist_ok=True)
+            write_nonpayment_page(page_path, page)
+            server_config = root / 'server.conf'
+            server_config.write_bytes(config)
+            main_config = root / 'nginx.conf'
+            main_config.write_text(
+                f'worker_processes 1;\npid {root / "nginx.pid"};\nerror_log {root / "error.log"};\n'
+                f'events {{ worker_connections 64; }}\nhttp {{ include {server_config}; }}\n',
+                encoding='utf-8',
+            )
+            checked = subprocess.run([nginx_bin, '-t', '-c', str(main_config)], capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            process = subprocess.Popen(
+                [nginx_bin, '-p', root.as_posix() + '/', '-c', str(main_config), '-g', 'daemon off;'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                response_status, response_body = None, b''
+                for _ in range(30):
+                    try:
+                        response = urlopen(f'http://127.0.0.1:{port}/', timeout=.5)
+                        response_status, response_body = response.status, response.read()
+                    except HTTPError as error:
+                        response_status, response_body = error.code, error.read()
+                    except URLError:
+                        if process.poll() is not None:
+                            self.fail(process.stderr.read())
+                        continue
+                    break
+                self.assertEqual(response_status, 503)
+                self.assertIn('Свяжитесь с администратором'.encode(), response_body)
+                self.assertNotIn(b'generic maintenance fallback', response_body)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
 
     def test_inventory_names_real_domain_before_default_catchall(self):
         item = describe_configuration(

@@ -674,8 +674,8 @@ def _proxy_server_closings(masked):
     return _server_closings(masked, proxy_only=True)
 
 
-def _server_closings(masked, proxy_only=False):
-    closings = []
+def _server_block_scopes(masked, proxy_only=False):
+    scopes = []
     for match in re.finditer(r'(?<![\w-])server\s*\{', masked):
         opening = masked.find('{', match.start(), match.end())
         depth = 1
@@ -687,11 +687,15 @@ def _server_closings(masked, proxy_only=False):
                 if depth == 0:
                     body = masked[opening + 1:index]
                     if re.search(r'\bserver_name\b', body) and (not proxy_only or re.search(r'\bproxy_pass\b', body)):
-                        closings.append(index)
+                        scopes.append((opening, index))
                     break
         else:
             raise OperationError('В конфигурации не закрыт блок server.')
-    return closings
+    return scopes
+
+
+def _server_closings(masked, proxy_only=False):
+    return [closing for _, closing in _server_block_scopes(masked, proxy_only)]
 
 
 def render_nonpayment_config(content, contact_text, page_path):
@@ -707,8 +711,8 @@ def render_nonpayment_config(content, contact_text, page_path):
     if not page_path.is_absolute() or not re.fullmatch(r'(?:[A-Za-z]:)?/[A-Za-z0-9_./-]+', page_path_text) or '..' in page_path.parts:
         raise OperationError('Недопустимый путь к странице отключения.')
     masked = _nginx_mask(text)
-    closings = _server_closings(masked)
-    if not closings:
+    server_scopes = _server_block_scopes(masked)
+    if not server_scopes:
         raise OperationError('В конфигурации не найден server-блок виртуального хоста.')
     page = (
         '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
@@ -792,19 +796,22 @@ def render_nonpayment_config(content, contact_text, page_path):
         '</section><footer><span>FOCUSLENS.DEV · © 2026</span><span>Время — наша валюта. Прозрачность — гарантия.</span></footer>'
         '</div></body></html>'
     ).encode('utf-8')
-    block = (
-        f'\n        {NONPAYMENT_MARKER}: begin\n'
-        f'        error_page 503 {NONPAYMENT_URI};\n'
-        f'        location = {NONPAYMENT_URI} {{\n'
-        f'            internal;\n'
-        f'            default_type text/html;\n'
-        f'            alias {page_path_text};\n'
-        f'        }}\n'
-        f'        if ($uri != {NONPAYMENT_URI}) {{ return 503; }}\n'
-        f'        {NONPAYMENT_MARKER}: end\n'
-    )
-    for closing in reversed(closings):
-        text = text[:closing] + block + text[closing:]
+    for opening, _ in reversed(server_scopes):
+        line_start = text.rfind('\n', 0, opening) + 1
+        server_indent = re.match(r'[ \t]*', text[line_start:opening]).group()
+        indent = server_indent + '    '
+        block = (
+            f'\n{indent}{NONPAYMENT_MARKER}: begin\n'
+            f'{indent}error_page 503 {NONPAYMENT_URI};\n'
+            f'{indent}location = {NONPAYMENT_URI} {{\n'
+            f'{indent}    internal;\n'
+            f'{indent}    default_type text/html;\n'
+            f'{indent}    alias {page_path_text};\n'
+            f'{indent}}}\n'
+            f'{indent}if ($uri != {NONPAYMENT_URI}) {{ return 503; }}\n'
+            f'{indent}{NONPAYMENT_MARKER}: end\n'
+        )
+        text = text[:opening + 1] + block + text[opening + 1:]
     return text.encode('utf-8'), page
 
 
