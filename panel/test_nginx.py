@@ -159,8 +159,10 @@ class NginxTests(SimpleTestCase):
         nginx_bin = shutil.which('nginx')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            root.chmod(0o755)
             webroot = root / 'www'
             webroot.mkdir()
+            webroot.chmod(0o755)
             maintenance_page = root / 'maitenance.html'
             maintenance_page.write_text('generic maintenance fallback', encoding='utf-8')
             snippet = root / 'maintenance_all.conf'
