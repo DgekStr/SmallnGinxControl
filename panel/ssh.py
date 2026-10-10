@@ -119,7 +119,7 @@ class SSHManager:
         for config in result['configs']:
             try:
                 nodes = self.parser.syntax(config['content'])
-                item = describe_configuration(nodes, config['id'], config['revision'], config['enabled'], config['toggleable'], config.get('maintenance', False), config.get('certificate_days'), config.get('certificate'))
+                item = describe_configuration(nodes, config['id'], config['revision'], config['enabled'], config['toggleable'], config.get('maintenance', False), config.get('certificate_days'), config.get('certificate'), config.get('nonpayment', False))
                 if item:
                     items.append(item)
             except OperationError as error:
@@ -156,6 +156,15 @@ class SSHManager:
 
     def toggle(self, identifier, enabled, expected_revision):
         return self.rpc('toggle', {'id': identifier, 'enabled': enabled, 'revision': expected_revision})
+
+    def toggle_nonpayment(self, identifier, enabled, expected_revision, contact_text):
+        return self.rpc('toggle_nonpayment', {
+            'id': identifier, 'enabled': enabled, 'revision': expected_revision,
+            'contact_text': contact_text,
+        })
+
+    def update_nonpayment_contact(self, contact_text):
+        return self.rpc('update_nonpayment_contact', {'contact_text': contact_text})
 
     def delete(self, identifier, expected_revision):
         return self.rpc('delete', {'id': identifier, 'revision': expected_revision})

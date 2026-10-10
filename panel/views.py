@@ -207,6 +207,7 @@ def api(request, resource):
                     'domain_expiry_scheduler_enabled': service_settings.domain_expiry_scheduler_enabled,
                     'domain_expiry_interval_days': service_settings.domain_expiry_interval_days,
                     'domain_expiry_send_time': service_settings.domain_expiry_send_time.strftime('%H:%M'),
+                    'nonpayment_contact_text': service_settings.nonpayment_contact_text,
                 })
             if resource == 'panel-tls':
                 return JsonResponse(panel_tls_status())
@@ -327,6 +328,12 @@ def api(request, resource):
                 if type(data.get('enabled')) is not bool:
                     raise OperationError('Состояние должно быть true или false.')
                 result = manager.toggle(target, data['enabled'], data.get('revision'))
+            elif action == 'nonpayment':
+                if type(data.get('enabled')) is not bool:
+                    raise OperationError('Состояние отключения должно быть true или false.')
+                contact_text = ServiceSetting.get_solo().nonpayment_contact_text
+                result = manager.toggle_nonpayment(target, data['enabled'], data.get('revision'), contact_text)
+                action = 'nonpayment_block' if data['enabled'] else 'nonpayment_unblock'
             elif action == 'delete':
                 result = manager.delete(target, data.get('revision'))
             elif action == 'reload':
@@ -385,6 +392,12 @@ def api(request, resource):
                     raise OperationError('Размер выборки access log должен быть целым числом от 1 байта до 100 МБ.')
                 service_settings.access_log_sample_bytes = sample_size
                 updated_fields.append('access_log_sample_bytes')
+            if 'nonpayment_contact_text' in data:
+                contact_text = data['nonpayment_contact_text']
+                if not isinstance(contact_text, str) or not contact_text.strip() or len(contact_text) > 500 or any(ord(char) < 32 and char not in '\n\t' for char in contact_text):
+                    raise OperationError('Текст для связи должен содержать от 1 до 500 символов без управляющих символов.')
+                service_settings.nonpayment_contact_text = contact_text.strip()
+                updated_fields.append('nonpayment_contact_text')
             if 'mattermost_webhook_url' in data:
                 webhook_url = data['mattermost_webhook_url']
                 if not isinstance(webhook_url, str):
@@ -435,7 +448,25 @@ def api(request, resource):
                 raise OperationError('Для включения проверки доменов сначала сохраните Mattermost webhook.')
             if not updated_fields:
                 raise OperationError('Укажите настройку для сохранения.')
+            old_nonpayment_contact_text = None
+            if 'nonpayment_contact_text' in updated_fields:
+                old_nonpayment_contact_text = ServiceSetting.objects.filter(pk=service_settings.pk).values_list('nonpayment_contact_text', flat=True).first()
             service_settings.save(update_fields=[*dict.fromkeys(updated_fields), 'updated_at'])
+            if 'nonpayment_contact_text' in updated_fields and old_nonpayment_contact_text != service_settings.nonpayment_contact_text:
+                updated_managers = []
+                try:
+                    for profile in Server.objects.all():
+                        host_manager = manager_for(profile)
+                        host_manager.update_nonpayment_contact(service_settings.nonpayment_contact_text)
+                        updated_managers.append(host_manager)
+                except Exception:
+                    ServiceSetting.objects.filter(pk=service_settings.pk).update(nonpayment_contact_text=old_nonpayment_contact_text)
+                    for host_manager in reversed(updated_managers):
+                        try:
+                            host_manager.update_nonpayment_contact(old_nonpayment_contact_text)
+                        except Exception:
+                            logging.getLogger(__name__).exception('Failed to roll back nonpayment page on nginx server')
+                    raise
             if 'session_timeout_hours' in updated_fields:
                 request.session.set_expiry(service_settings.session_timeout_hours * 3600)
             target = ','.join(updated_fields)

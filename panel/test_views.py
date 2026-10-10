@@ -123,11 +123,26 @@ class AuthenticationTests(TestCase):
         self.assertEqual(response.json()['log_retention_days'], 30)
         self.assertEqual(response.json()['session_timeout_hours'], 24)
         self.assertEqual(response.json()['access_log_sample_bytes'], 128 * 1024)
+        self.assertEqual(response.json()['nonpayment_contact_text'], 'Свяжитесь с администратором хостинга')
         response = self.client.post('/api/settings/', {'log_retention_days': 45}, content_type='application/json')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get('/api/settings/').json()['log_retention_days'], 45)
         response = self.client.post('/api/settings/', {'log_retention_days': 0}, content_type='application/json')
         self.assertEqual(response.status_code, 400)
+
+    def test_nonpayment_contact_text_is_persisted_and_applied_to_host_managers(self):
+        self.client.force_login(self.user)
+        with patch('panel.views.manager_for') as manager_for:
+            response = self.client.post('/api/settings/', {'nonpayment_contact_text': 'Напишите администратору'}, content_type='application/json')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(self.client.get('/api/settings/').json()['nonpayment_contact_text'], 'Напишите администратору')
+        manager_for.return_value.update_nonpayment_contact.assert_called_once_with('Напишите администратору')
+
+        for invalid in ['', ' ' * 3, 'x' * 501, 'контакт\x00']:
+            with self.subTest(invalid=invalid):
+                response = self.client.post('/api/settings/', {'nonpayment_contact_text': invalid}, content_type='application/json')
+                self.assertEqual(response.status_code, 400)
 
     def test_access_log_sample_size_is_persisted_and_cannot_exceed_100_mb(self):
         self.client.force_login(self.user)

@@ -5,7 +5,7 @@ from unittest.mock import patch
 from django.test import SimpleTestCase, override_settings
 
 from .nginx import NginxManager, describe_configuration
-from .transactions import OperationError, render_maintenance_config
+from .transactions import OperationError, nonpayment_backup_path, render_maintenance_config
 
 
 class NginxTests(SimpleTestCase):
@@ -45,6 +45,43 @@ class NginxTests(SimpleTestCase):
         self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
         self.assertFalse(self.manager.maintenance_backup(item['id']).exists())
 
+    def test_nonpayment_suspension_is_separate_from_maintenance_and_restores_original(self):
+        for kind, target in [('host', '/var/www/html'), ('proxy', 'http://127.0.0.1:3000')]:
+            with self.subTest(kind=kind):
+                name = 'unpaid-' + kind + '.test'
+                self.manager.create({'name': name, 'kind': kind, 'target': target, 'port': 80})
+                item = next(item for item in self.manager.inventory()['items'] if item['name'] == name)
+                original = self.manager.read(item['id'])['content'].encode()
+
+                self.manager.toggle_nonpayment(item['id'], True, item['revision'], 'Свяжитесь с администратором хостинга')
+
+                suspended = next(item for item in self.manager.inventory()['items'] if item['name'] == name)
+                content = self.manager.read(item['id'])['content']
+                self.assertFalse(suspended['enabled'])
+                self.assertFalse(suspended['maintenance'])
+                self.assertTrue(suspended['nonpayment'])
+                self.assertIn('отключён по причине неоплаты', content)
+                self.assertIn('Свяжитесь с администратором хостинга', content)
+                self.assertIn('$host', content)
+                self.assertIn('error_page 503 /__smallnginxcontrol_nonpayment.html;', content)
+                self.assertIn('ОТКЛЮЧЁН', content)
+                self.assertNotIn('Service temporarily unavailable', content)
+                self.assertNotIn('/maitenance.html', content)
+                stored = nonpayment_backup_path(self.manager.state, item['id'])
+                self.assertTrue(stored.is_file())
+                with self.assertRaisesRegex(OperationError, 'переключателем оплаты'):
+                    self.manager.save(item['id'], original.decode(), suspended['revision'])
+
+                self.manager.update_nonpayment_contact('Новый контакт')
+                self.assertIn('Новый контакт', self.manager.read(item['id'])['content'])
+                updated_item = next(item for item in self.manager.inventory()['items'] if item['name'] == name)
+                self.manager.toggle_nonpayment(item['id'], False, updated_item['revision'], 'Новый контакт')
+                restored = next(item for item in self.manager.inventory()['items'] if item['name'] == name)
+                self.assertTrue(restored['enabled'])
+                self.assertFalse(restored['nonpayment'])
+                self.assertEqual(self.manager.read(item['id'])['content'].encode(), original)
+                self.assertFalse(stored.exists())
+
     def test_management_proxy_cannot_be_edited_disabled_or_deleted(self):
         with override_settings(SNC_SERVER='192.0.2.15', SNC_PORT=7445):
             self.manager.create({'name': 'panel-control.test', 'kind': 'proxy', 'target': 'http://127.0.0.1:7445', 'port': 7444})
@@ -58,6 +95,27 @@ class NginxTests(SimpleTestCase):
                 self.manager.toggle(identifier, False, config['revision'])
             with self.assertRaisesRegex(OperationError, 'не является управляемым'):
                 self.manager.delete(identifier, config['revision'])
+
+    def test_access_log_update_changes_nonpayment_backup_not_suspension(self):
+        self.manager.create({'name': 'logging-unpaid.test', 'kind': 'host', 'target': '/var/www/html', 'port': 80})
+        item = self.manager.inventory()['items'][0]
+        original = self.manager.read(item['id'])['content'].encode()
+        self.manager.toggle_nonpayment(item['id'], True, item['revision'], 'Свяжитесь с администратором хостинга')
+        suspended = self.manager.read(item['id'])['content'].encode()
+        stored = nonpayment_backup_path(self.manager.state, item['id'])
+        updated_original = original + b'\n# access log settings preserved\n'
+
+        with patch('panel.nginx.configure_host_access_logs', return_value=(updated_original, ['logging-unpaid.test'])) as configure:
+            result = self.manager.enable_host_logging(dry_run=False)
+
+        self.assertEqual(result['hosts'], 1)
+        self.assertEqual(self.manager.read(item['id'])['content'].encode(), suspended)
+        self.assertEqual(stored.read_bytes(), updated_original)
+        configure.assert_called_once_with(original, Path(item['id']).stem, self.manager.logs_root)
+
+        updated_item = self.manager.inventory()['items'][0]
+        self.manager.toggle_nonpayment(item['id'], False, updated_item['revision'], 'Свяжитесь с администратором хостинга')
+        self.assertEqual(self.manager.read(item['id'])['content'].encode(), updated_original)
 
     def test_inventory_names_real_domain_before_default_catchall(self):
         item = describe_configuration(

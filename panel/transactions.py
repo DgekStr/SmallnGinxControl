@@ -1,4 +1,5 @@
 import hashlib
+import html
 import ipaddress
 import json
 import math
@@ -27,6 +28,8 @@ def validate_access_log_sample_size(sample_size):
 
 MAINTENANCE_MARKER = '# smallnginxcontrol-maintenance'
 MAINTENANCE_URI = '/__smallnginxcontrol_maintenance.html'
+NONPAYMENT_MARKER = '# smallnginxcontrol-nonpayment'
+NONPAYMENT_URI = '/__smallnginxcontrol_nonpayment.html'
 ACCESS_LOG_BYTES_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:\s|$)')
 ACCESS_LOG_TRAFFIC_PATTERN = re.compile(rb'"\s+\d{3}\s+(\d+|-)(?:[ \t]+(\d+|-))?(?=[ \t"]|$)')
 TRAFFIC_LOG_FORMAT_NAME = 'smallnginxcontrol_traffic'
@@ -103,6 +106,11 @@ def atomic_write(path, content):
 def maintenance_backup_path(state, identifier):
     digest = hashlib.sha256(identifier.encode('utf-8')).hexdigest()
     return Path(state) / 'maintenance' / f'{digest}.original'
+
+
+def nonpayment_backup_path(state, identifier):
+    digest = hashlib.sha256(identifier.encode('utf-8')).hexdigest()
+    return Path(state) / 'nonpayment' / f'{digest}.original'
 
 
 def is_allowed_log_path(candidate, roots):
@@ -256,6 +264,11 @@ def certificate_days_remaining(certificates, now=None):
 
 def is_maintenance_config(content):
     marker = MAINTENANCE_MARKER.encode('ascii') if isinstance(content, bytes) else MAINTENANCE_MARKER
+    return marker in content
+
+
+def is_nonpayment_config(content):
+    marker = NONPAYMENT_MARKER.encode('ascii') if isinstance(content, bytes) else NONPAYMENT_MARKER
     return marker in content
 
 
@@ -648,6 +661,10 @@ def configure_host_access_logs(content, fallback_name, log_root='/var/log/nginx'
 
 
 def _proxy_server_closings(masked):
+    return _server_closings(masked, proxy_only=True)
+
+
+def _server_closings(masked, proxy_only=False):
     closings = []
     for match in re.finditer(r'(?<![\w-])server\s*\{', masked):
         opening = masked.find('{', match.start(), match.end())
@@ -659,12 +676,122 @@ def _proxy_server_closings(masked):
                 depth -= 1
                 if depth == 0:
                     body = masked[opening + 1:index]
-                    if re.search(r'\bserver_name\b', body) and re.search(r'\bproxy_pass\b', body):
+                    if re.search(r'\bserver_name\b', body) and (not proxy_only or re.search(r'\bproxy_pass\b', body)):
                         closings.append(index)
                     break
         else:
             raise OperationError('В конфигурации не закрыт блок server.')
     return closings
+
+
+def render_nonpayment_config(content, contact_text):
+    text = content.decode('utf-8') if isinstance(content, bytes) else content
+    if is_nonpayment_config(text):
+        raise OperationError('Конфигурация уже отключена из-за неоплаты.')
+    if is_maintenance_config(text):
+        raise OperationError('Сначала восстановите обычный режим обслуживания.')
+    if not isinstance(contact_text, str) or not contact_text.strip() or len(contact_text) > 500:
+        raise OperationError('Текст для связи должен содержать от 1 до 500 символов.')
+    masked = _nginx_mask(text)
+    closings = _server_closings(masked)
+    if not closings:
+        raise OperationError('В конфигурации не найден server-блок виртуального хоста.')
+    page = (
+        '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="theme-color" content="#050816"><meta name="robots" content="noindex, nofollow">'
+        '<title>Доступ ограничен | FOCUSLENS.DEV</title><style>'
+        ':root{color-scheme:dark;--bg:#050816;--surface:#0b1226;--surface-raised:#111b34;'
+        '--text:#f5f7ff;--muted:#a4b0c7;--quiet:#74839e;--cyan:#22d3ee;--violet:#8b5cf6;'
+        '--line:rgba(179,202,236,.16);--mono:"Cascadia Code","SFMono-Regular",Consolas,monospace}'
+        '*{box-sizing:border-box}html{min-width:320px;min-height:100%;background:var(--bg)}'
+        'body{min-height:100vh;min-height:100svh;margin:0;overflow-x:hidden;color:var(--text);'
+        'background:radial-gradient(ellipse at 74% 41%,rgba(34,211,238,.08),transparent 33rem),'
+        'radial-gradient(ellipse at 12% 6%,rgba(124,58,237,.12),transparent 25rem),'
+        'repeating-linear-gradient(0deg,transparent 0 47px,rgba(171,195,226,.025) 48px),'
+        'repeating-linear-gradient(90deg,transparent 0 47px,rgba(171,195,226,.025) 48px),var(--bg);'
+        'font-family:Inter,"Segoe UI",sans-serif;line-height:1.6}'
+        '.page-shell{display:flex;flex-direction:column;width:min(1320px,calc(100% - 64px));'
+        'min-height:100vh;min-height:100svh;margin:0 auto}.site-header{display:flex;align-items:center;'
+        'justify-content:space-between;min-height:92px;border-bottom:1px solid var(--line);'
+        'animation:reveal 500ms ease-out both}.brand{color:var(--text);font-size:17px;'
+        'font-weight:750;letter-spacing:.04em;text-decoration:none}.brand small{display:block;'
+        'margin-top:5px;color:var(--quiet);font:500 10px var(--mono);letter-spacing:.08em}'
+        '.header-label{color:var(--quiet);font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase}'
+        'main{display:grid;flex:1;grid-template-columns:minmax(0,1.08fr) minmax(340px,.92fr);'
+        'align-items:center;gap:56px;padding:58px 0 54px}.copy{max-width:650px;animation:reveal 650ms 80ms ease-out both}'
+        '.eyebrow{display:flex;align-items:center;gap:11px;margin:0 0 26px;color:#a5eaf4;'
+        'font:600 12px var(--mono);letter-spacing:.1em;text-transform:uppercase}.eyebrow:before{'
+        'width:22px;height:1px;background:var(--cyan);content:""}h1{max-width:620px;margin:0;'
+        'font-size:58px;font-weight:650;line-height:1.08;letter-spacing:0}.lead{max-width:540px;'
+        'margin:23px 0 0;color:var(--muted);font-size:17px;line-height:1.75}.actions{margin-top:30px;'
+        'color:var(--quiet);font-size:13px}.status-panel{position:relative;min-height:365px;overflow:hidden;'
+        'padding:28px;border:1px solid var(--line);background:linear-gradient(145deg,rgba(17,27,52,.92),'
+        'rgba(8,14,30,.86)),var(--surface);box-shadow:0 28px 85px rgba(0,0,0,.25);'
+        'animation:reveal 700ms 160ms ease-out both}.panel-top,.panel-bottom{display:flex;'
+        'justify-content:space-between;gap:16px}.panel-top{align-items:center;padding-bottom:19px;'
+        'border-bottom:1px solid var(--line);color:var(--quiet);font:10px var(--mono);'
+        'letter-spacing:.1em;text-transform:uppercase}.status-light{display:inline-flex;align-items:center;'
+        'gap:9px;color:#c1ccd9}.status-light:before{width:7px;height:7px;border-radius:50%;'
+        'background:#8aa5b8;box-shadow:0 0 0 4px rgba(138,165,184,.1);content:""}'
+        '.status-display{position:relative;display:grid;min-height:248px;place-content:center;text-align:center}'
+        '.status-display:before,.status-display:after{position:absolute;width:26px;height:26px;'
+        'border-color:rgba(34,211,238,.55);border-style:solid;content:""}.status-display:before{'
+        'top:24px;left:3px;border-width:1px 0 0 1px}.status-display:after{right:3px;bottom:22px;border-width:0 1px 1px 0}'
+        '.status-code{margin:0;color:transparent;background:linear-gradient(130deg,#f5f7ff 10%,#8ea0be 83%);'
+        'background-clip:text;font:600 43px/1.2 var(--mono);letter-spacing:0}.status-description{'
+        'margin-top:12px;color:var(--quiet);font:10px var(--mono);letter-spacing:.13em;text-transform:uppercase}'
+        '.panel-bottom{align-items:center;padding-top:19px;border-top:1px solid var(--line);'
+        'color:var(--muted);font:10px var(--mono)}.panel-bottom strong{color:#a5eaf4;font-weight:600}'
+        '.quote-row{display:grid;grid-template-columns:210px minmax(0,1fr);align-items:center;gap:26px;'
+        'min-height:112px;padding:20px 0;border-top:1px solid var(--line);animation:reveal 700ms 240ms ease-out both}'
+        '.quote-label{margin:0;color:var(--quiet);font:10px var(--mono);letter-spacing:.1em;text-transform:uppercase}'
+        '.contact{min-width:0;color:#dce4f2;font-size:15px;line-height:1.65;white-space:pre-line;overflow-wrap:anywhere}'
+        'footer{display:flex;min-height:66px;align-items:center;justify-content:space-between;gap:20px;'
+        'border-top:1px solid var(--line);color:var(--quiet);font:10px var(--mono);letter-spacing:.04em;'
+        'animation:reveal 700ms 300ms ease-out both}footer span:last-child{color:#8292ac}'
+        '@keyframes reveal{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}'
+        '@media(max-width:900px){.page-shell{width:min(100% - 48px,720px)}main{grid-template-columns:1fr;gap:38px;padding:48px 0 38px}'
+        'h1{max-width:700px;font-size:48px}.status-panel{min-height:325px}.status-display{min-height:210px}}'
+        '@media(max-width:560px){.page-shell{width:calc(100% - 36px)}.site-header{min-height:76px}'
+        '.brand{font-size:14px}.brand small{font-size:9px}.header-label{max-width:114px;font-size:9px;text-align:right}'
+        'main{gap:30px;padding:42px 0 32px}.eyebrow{margin-bottom:20px;font-size:10px}h1{font-size:39px}'
+        '.lead{margin-top:17px;font-size:15px;line-height:1.7}.actions{margin-top:25px}'
+        '.status-panel{min-height:285px;padding:20px}.panel-top,.panel-bottom{font-size:9px}'
+        '.status-display{min-height:190px}.status-code{font-size:30px}.status-description{font-size:9px}'
+        '.quote-row{grid-template-columns:1fr;gap:10px;padding:18px 0}.contact{font-size:13px}'
+        'footer{min-height:62px;align-items:flex-start;flex-direction:column;justify-content:center;gap:2px;font-size:9px}}'
+        '@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}'
+        '</style></head><body><div class="page-shell"><header class="site-header">'
+        '<div class="brand">FOCUSLENS<small>ENGINEERING / ACCESS</small></div>'
+        '<span class="header-label">Инженерия с человеческим контролем</span></header><main>'
+        '<section class="copy"><p class="eyebrow">Ограничение доступа</p>'
+        '<h1>Доступ к сайту приостановлен</h1>'
+        '<p class="lead">Домен <strong>$host</strong> отключён по причине неоплаты. После урегулирования оплаты доступ будет восстановлен.</p>'
+        '<p class="actions">Сайт временно не обслуживается.</p></section>'
+        '<aside class="status-panel"><div class="panel-top"><span>Account monitor / 01</span>'
+        '<span class="status-light">Доступ ограничен</span></div><div class="status-display">'
+        '<p class="status-code">ОТКЛЮЧЁН</p><span class="status-description">Блокировка по неоплате</span>'
+        '</div><div class="panel-bottom"><span>Домен</span><strong>$host</strong></div></aside></main>'
+        '<section class="quote-row"><p class="quote-label">Связь с администратором</p>'
+        '<div class="contact">' + html.escape(contact_text.strip()).replace('$', '&#36;').replace('\n', '&#10;') + '</div>'
+        '</section><footer><span>FOCUSLENS.DEV · © 2026</span><span>Время — наша валюта. Прозрачность — гарантия.</span></footer>'
+        '</div></body></html>'
+    ).replace('\\', '\\\\').replace("'", "\\'")
+    block = (
+        f'\n        {NONPAYMENT_MARKER}: begin\n'
+        f'        error_page 503 {NONPAYMENT_URI};\n'
+        f'        location = {NONPAYMENT_URI} {{\n'
+        f'            internal;\n'
+        f'            default_type text/html;\n'
+        f"            return 200 '{page}';\n"
+        f'        }}\n'
+        f'        if ($uri != {NONPAYMENT_URI}) {{ return 503; }}\n'
+        f'        {NONPAYMENT_MARKER}: end\n'
+    )
+    for closing in reversed(closings):
+        text = text[:closing] + block + text[closing:]
+    return text.encode('utf-8')
 
 
 def has_proxy_server(content):

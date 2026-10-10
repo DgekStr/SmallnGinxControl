@@ -100,6 +100,6 @@ npm run test:e2e
 ## Документы
 
 - [Развёртывание и обновление](deployment.md)
-- [Release v1.0.3](release-v1.0.3.md)
+- [Release v1.0.4](release-v1.0.4.md)
 - [Сравнение GitHub-решений](research-2026-10-04.md)
 - [Roadmap и readiness](roadmap-2026-10-04.md)

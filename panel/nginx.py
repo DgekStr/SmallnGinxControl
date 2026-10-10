@@ -17,7 +17,8 @@ from .transactions import (
     ensure_traffic_log_format, issue_webroot_certificate, set_global_traffic_block as apply_global_traffic_block,
     validate_certificate_request, validate_maintenance_page_path,
     has_proxy_server, is_allowed_log_path,
-    is_maintenance_config, maintenance_backup_path, render_maintenance_config,
+    is_maintenance_config, is_nonpayment_config, maintenance_backup_path,
+    nonpayment_backup_path, render_maintenance_config, render_nonpayment_config,
 )
 
 
@@ -38,7 +39,7 @@ def revision(content):
     return hashlib.sha256(content).hexdigest()
 
 
-def describe_configuration(nodes, identifier, content_revision, enabled, toggleable, maintenance=False, certificate_days=None, certificate=None):
+def describe_configuration(nodes, identifier, content_revision, enabled, toggleable, maintenance=False, certificate_days=None, certificate=None, nonpayment=False):
     directives = list(walk(nodes))
     servers = sum(node['directive'] == 'server' and 'block' in node for node in directives)
     if not servers:
@@ -53,7 +54,8 @@ def describe_configuration(nodes, identifier, content_revision, enabled, togglea
         'target': ', '.join(dict.fromkeys(upstreams or roots)) or 'Конфигурация сервера',
         'listen': ', '.join(dict.fromkeys(listens)) or '80',
         'tls': any('ssl' in node['args'] for node in directives if node['directive'] == 'listen'),
-        'enabled': enabled, 'maintenance': maintenance, 'certificate_days': certificate_days, 'certificate': certificate,
+        'enabled': enabled, 'maintenance': maintenance, 'nonpayment': nonpayment,
+        'certificate_days': certificate_days, 'certificate': certificate,
         'servers': servers, 'toggleable': toggleable, 'revision': content_revision,
     }
 
@@ -178,6 +180,7 @@ class NginxManager:
             try:
                 content = path.read_bytes()
                 maintenance = is_maintenance_config(content)
+                nonpayment = is_nonpayment_config(content)
                 nodes = self.parse(path)
                 if self._is_management_config(nodes):
                     continue
@@ -187,13 +190,13 @@ class NginxManager:
                 enabled = bool(links) or (standard_conf and path.suffix == '.conf') or path.parent == self.root / 'sites-enabled'
                 if not self.demo:
                     enabled = path in active_files
-                if maintenance:
+                if maintenance or nonpayment:
                     enabled = False
                 certificates = [node['args'][0] for node in walk(nodes) if node['directive'] == 'ssl_certificate' and node['args']]
                 is_tls = any('ssl' in node['args'] for node in walk(nodes) if node['directive'] == 'listen')
                 certificate = certificate_details(certificates) if is_tls else None
                 certificate_days = certificate['days_remaining'] if certificate else None
-                item = describe_configuration(nodes, identifier, revision(content), enabled, standard_site or standard_conf, maintenance, certificate_days, certificate)
+                item = describe_configuration(nodes, identifier, revision(content), enabled, standard_site or standard_conf, maintenance, certificate_days, certificate, nonpayment)
                 if item:
                     items.append(item)
             except (OperationError, OSError, UnicodeError) as error:
@@ -272,6 +275,8 @@ class NginxManager:
                 raise OperationError('Нельзя редактировать конфигурацию панели. Измените сертификат в настройках.')
             if revision(old) != expected_revision:
                 raise OperationError('Файл уже изменён. Откройте его заново перед сохранением.')
+            if is_nonpayment_config(old):
+                raise OperationError('Сначала восстановите сайт отдельным переключателем оплаты.')
             self.backup(identifier, old)
             return apply_transaction(lambda: atomic_write(path, content.encode('utf-8')), lambda: atomic_write(path, old), self.validate, self.reload)
 
@@ -298,6 +303,8 @@ class NginxManager:
                 )
                 stored.unlink(missing_ok=True)
                 return result
+            if is_nonpayment_config(current):
+                raise OperationError('Используйте отдельный переключатель отключения из-за неоплаты.')
             active = (path.parent == self.root / 'sites-available' and bool(self.links(path))) or (path.parent == self.root / 'conf.d' and path.suffix == '.conf')
             if not enabled and active and has_proxy_server(current):
                 self.require_maintenance_page()
@@ -350,6 +357,84 @@ class NginxManager:
             self.backup(identifier, current)
             return apply_transaction(change, rollback, self.validate, self.reload)
 
+    def toggle_nonpayment(self, identifier, enabled, expected_revision, contact_text):
+        with self.lock():
+            path = self.path(identifier)
+            current = path.read_bytes()
+            if revision(current) != expected_revision:
+                raise OperationError('Конфигурация изменилась. Обновите список.')
+            if self._is_management_config(self.parse(path)):
+                raise OperationError('Нельзя отключить конфигурацию, через которую открыта эта панель.')
+            if type(enabled) is not bool:
+                raise OperationError('Состояние отключения должно быть true или false.')
+            stored = nonpayment_backup_path(self.state, identifier)
+            if is_nonpayment_config(current):
+                if enabled:
+                    return 'Отключение из-за неоплаты уже включено.'
+                if not stored.is_file():
+                    raise OperationError('Исходная конфигурация для восстановления не найдена.')
+                original = stored.read_bytes()
+                self.backup(identifier, current)
+                result = apply_transaction(
+                    lambda: atomic_write(path, original),
+                    lambda: atomic_write(path, current),
+                    self.validate, self.reload,
+                )
+                stored.unlink(missing_ok=True)
+                return result
+            if not enabled:
+                return 'Отключение из-за неоплаты уже выключено.'
+            if is_maintenance_config(current):
+                raise OperationError('Сначала восстановите обычный режим обслуживания.')
+            active = (path.parent == self.root / 'sites-available' and bool(self.links(path))) or (path.parent == self.root / 'conf.d' and path.suffix == '.conf')
+            if not active:
+                raise OperationError('Сначала включите виртуальный хост.')
+            if stored.exists():
+                raise OperationError('Резервная копия отключения уже существует. Восстановите сайт вручную.')
+            suspended = render_nonpayment_config(current, contact_text)
+            self.backup(identifier, current)
+
+            def change():
+                stored.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write(stored, current)
+                atomic_write(path, suspended)
+
+            def rollback():
+                atomic_write(path, current)
+                stored.unlink(missing_ok=True)
+
+            return apply_transaction(change, rollback, self.validate, self.reload)
+
+    def update_nonpayment_contact(self, contact_text):
+        with self.lock():
+            changes = []
+            for item in self.inventory()['items']:
+                if not item.get('nonpayment'):
+                    continue
+                path = self.path(item['id'])
+                stored = nonpayment_backup_path(self.state, item['id'])
+                if not stored.is_file():
+                    raise OperationError(f'Исходная конфигурация для {item["name"]} не найдена.')
+                current = path.read_bytes()
+                updated = render_nonpayment_config(stored.read_bytes(), contact_text)
+                if current != updated:
+                    changes.append((item['id'], path, current, updated))
+            if not changes:
+                return 'Текст заглушки сохранён.'
+            for identifier, _, current, _ in changes:
+                self.backup(identifier, current)
+
+            def change():
+                for _, path, _, updated in changes:
+                    atomic_write(path, updated)
+
+            def rollback():
+                for _, path, current, _ in changes:
+                    atomic_write(path, current)
+
+            apply_transaction(change, rollback, self.validate, self.reload)
+            return 'Текст заглушки обновлён.'
+
     def _is_management_config(self, nodes):
         local_hosts = {'127.0.0.1', 'localhost', settings.SNC_SERVER}
         for node in walk(nodes):
@@ -386,9 +471,13 @@ class NginxManager:
             self.backup(identifier, current)
             if stored.is_file():
                 self.backup(identifier, stored.read_bytes())
+            nonpayment_stored = nonpayment_backup_path(self.state, identifier)
+            if nonpayment_stored.is_file():
+                self.backup(identifier, nonpayment_stored.read_bytes())
             delete_config_transaction(path, links, self.validate, self.reload)
             if stored.is_file():
                 stored.unlink()
+            nonpayment_stored.unlink(missing_ok=True)
             return 'Хост удалён из nginx. Резервная копия конфигурации сохранена.'
 
     def enable_host_logging(self, *, dry_run=True):
@@ -406,6 +495,16 @@ class NginxManager:
                     continue
                 identifier = item['id']
                 path = self.path(identifier)
+                if item.get('nonpayment'):
+                    stored = nonpayment_backup_path(self.state, identifier)
+                    if stored.is_file():
+                        stored_original = stored.read_bytes()
+                        stored_updated, stored_hosts = configure_host_access_logs(stored_original, path.stem, self.logs_root)
+                        if stored_updated != stored_original:
+                            self.syntax(stored_updated.decode('utf-8'))
+                            plans[stored] = (identifier + '.nonpayment-original', stored_original, stored_updated)
+                            hosts.update(stored_hosts)
+                    continue
                 original = path.read_bytes()
                 updated, changed_hosts = configure_host_access_logs(original, path.stem, self.logs_root)
                 if updated != original:

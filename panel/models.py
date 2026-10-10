@@ -122,6 +122,7 @@ class ServiceSetting(models.Model):
     domain_expiry_send_time = models.TimeField(default=time(9, 0))
     domain_expiry_last_check_at = models.DateTimeField(null=True, blank=True)
     domain_expiry_monitored_domains = models.JSONField(default=list, blank=True)
+    nonpayment_contact_text = models.CharField(max_length=500, default='Свяжитесь с администратором хостинга')
     updated_at = models.DateTimeField(auto_now=True)
 
     @staticmethod

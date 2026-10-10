@@ -16,7 +16,8 @@ if __package__:
         ACCESS_LOG_SAMPLE_DEFAULT_BYTES, OperationError, access_log_traffic_totals, apply_transaction, atomic_write,
         certificate_details, issue_webroot_certificate, validate_certificate_request,
         delete_config_transaction, ensure_traffic_log_format, has_proxy_server, is_allowed_log_path,
-        is_maintenance_config, maintenance_backup_path, render_maintenance_config,
+        is_maintenance_config, is_nonpayment_config, maintenance_backup_path,
+        nonpayment_backup_path, render_maintenance_config, render_nonpayment_config,
         set_global_traffic_block, validate_maintenance_page_path,
     )
 
@@ -106,11 +107,12 @@ class RemoteWorker:
                 if total > 4 * 1024 * 1024:
                     raise OperationError('Configuration inventory exceeds 4 MB')
                 maintenance = is_maintenance_config(config['content'])
+                nonpayment = is_nonpayment_config(config['content'])
                 certificate_matches = re.findall(r'(?m)^\s*ssl_certificate\s+(?:"([^"]+)"|\'([^\']+)\'|([^;\s]+))', config['content'])
                 certificate_paths = [value for match in certificate_matches for value in match if value]
                 is_tls = bool(re.search(r'(?m)^\s*listen\s+[^;]*\bssl\b', config['content']))
                 certificate = certificate_details(certificate_paths) if is_tls else None
-                configs.append({**config, 'enabled': path in active and not maintenance, 'maintenance': maintenance, 'certificate_days': certificate['days_remaining'] if certificate else None, 'certificate': certificate, 'toggleable': path.parent in [self.root / 'conf.d', self.root / 'sites-available']})
+                configs.append({**config, 'enabled': path in active and not maintenance and not nonpayment, 'maintenance': maintenance, 'nonpayment': nonpayment, 'certificate_days': certificate['days_remaining'] if certificate else None, 'certificate': certificate, 'toggleable': path.parent in [self.root / 'conf.d', self.root / 'sites-available']})
             except (OSError, UnicodeError, OperationError) as error:
                 warnings.append(identifier + ': ' + str(error))
         return {'configs': configs, 'warnings': warnings}
@@ -213,6 +215,8 @@ class RemoteWorker:
         if hashlib.sha256(old).hexdigest() != data.get('revision'):
             raise OperationError('Configuration changed; reload it before saving')
         if action == 'save':
+            if is_nonpayment_config(old):
+                raise OperationError('Restore this site with the nonpayment toggle before editing it')
             content = data['content'].encode('utf-8')
             if len(content) > 256 * 1024:
                 raise OperationError('Configuration too large')
@@ -225,6 +229,8 @@ class RemoteWorker:
         self.backup(data['id'], old)
         enabled = data['enabled']
         stored = self.maintenance_backup(data['id'])
+        if is_nonpayment_config(old):
+            raise OperationError('Use the separate nonpayment toggle to restore this host')
         if is_maintenance_config(old):
             if not enabled:
                 return 'Maintenance mode is already enabled'
@@ -290,6 +296,83 @@ class RemoteWorker:
             raise OperationError('Custom includes must be edited in nginx.conf')
         return apply_transaction(change, rollback, self.validate, self.reload)
 
+    def toggle_nonpayment(self, data):
+        path = self.path(data['id'])
+        current = path.read_bytes()
+        if hashlib.sha256(current).hexdigest() != data.get('revision'):
+            raise OperationError('Configuration changed; reload it before disabling')
+        if self._is_management_config(current.decode('utf-8')):
+            raise OperationError('Cannot disable the configuration serving this control panel')
+        enabled = data.get('enabled')
+        if type(enabled) is not bool:
+            raise OperationError('Nonpayment state must be a boolean')
+        stored = nonpayment_backup_path(self.state, data['id'])
+        if is_nonpayment_config(current):
+            if enabled:
+                return 'Nonpayment suspension is already enabled'
+            if not stored.is_file():
+                raise OperationError('Original configuration for restoration is missing')
+            original = stored.read_bytes()
+            self.backup(data['id'], current)
+            result = apply_transaction(
+                lambda: atomic_write(path, original),
+                lambda: atomic_write(path, current),
+                self.validate, self.reload,
+            )
+            stored.unlink(missing_ok=True)
+            return result
+        if not enabled:
+            return 'Nonpayment suspension is already disabled'
+        if is_maintenance_config(current):
+            raise OperationError('Restore the ordinary maintenance configuration first')
+        active = (path.parent == self.root / 'sites-available' and any(link.is_symlink() and link.resolve() == path for link in (self.root / 'sites-enabled').glob('*'))) or (path.parent == self.root / 'conf.d' and path.suffix == '.conf')
+        if not active:
+            raise OperationError('Enable the virtual host first')
+        if stored.exists():
+            raise OperationError('A nonpayment backup already exists; restore the site manually first')
+        suspended = render_nonpayment_config(current, data.get('contact_text', ''))
+        self.backup(data['id'], current)
+
+        def change():
+            stored.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            atomic_write(stored, current)
+            atomic_write(path, suspended)
+
+        def rollback():
+            atomic_write(path, current)
+            stored.unlink(missing_ok=True)
+
+        return apply_transaction(change, rollback, self.validate, self.reload)
+
+    def update_nonpayment_contact(self, contact_text):
+        changes = []
+        for config in self.inventory()['configs']:
+            if not config.get('nonpayment'):
+                continue
+            path = self.path(config['id'])
+            stored = nonpayment_backup_path(self.state, config['id'])
+            if not stored.is_file():
+                raise OperationError(f'Original configuration for {config["id"]} is missing')
+            current = path.read_bytes()
+            updated = render_nonpayment_config(stored.read_bytes(), contact_text)
+            if current != updated:
+                changes.append((config['id'], path, current, updated))
+        if not changes:
+            return 'Nonpayment page text saved'
+        for identifier, _, current, _ in changes:
+            self.backup(identifier, current)
+
+        def change():
+            for _, path, _, updated in changes:
+                atomic_write(path, updated)
+
+        def rollback():
+            for _, path, current, _ in changes:
+                atomic_write(path, current)
+
+        apply_transaction(change, rollback, self.validate, self.reload)
+        return 'Nonpayment page text updated'
+
     def _is_management_config(self, content):
         for match in re.finditer(r'(?<![\w-])(?:proxy_pass|fastcgi_pass|uwsgi_pass|scgi_pass|grpc_pass)\s+([^;]+);', content):
             upstream = urlsplit(match.group(1).strip().strip('"\''))
@@ -313,12 +396,16 @@ class RemoteWorker:
             raise OperationError('Cannot delete the configuration serving this control panel')
         links = [link for link in (self.root / 'sites-enabled').glob('*') if link.is_symlink() and link.resolve() == path] if standard_site else []
         stored = self.maintenance_backup(identifier)
+        nonpayment_stored = nonpayment_backup_path(self.state, identifier)
         self.backup(identifier, content)
         if stored.is_file():
             self.backup(identifier, stored.read_bytes())
+        if nonpayment_stored.is_file():
+            self.backup(identifier, nonpayment_stored.read_bytes())
         delete_config_transaction(path, links, self.validate, self.reload)
         if stored.is_file():
             stored.unlink()
+        nonpayment_stored.unlink(missing_ok=True)
         return 'Host deleted from nginx; a configuration backup was saved'
 
     def traffic_top(self, limit=5, sample_size=ACCESS_LOG_SAMPLE_DEFAULT_BYTES):
@@ -408,6 +495,12 @@ class RemoteWorker:
         if operation == 'traffic_maintenance':
             with self.lock():
                 return self.set_traffic_maintenance(data.get('enabled'), data.get('page_path', ''))
+        if operation == 'toggle_nonpayment':
+            with self.lock():
+                return self.toggle_nonpayment(data)
+        if operation == 'update_nonpayment_contact':
+            with self.lock():
+                return self.update_nonpayment_contact(data.get('contact_text', ''))
         if operation not in {'save', 'create', 'toggle', 'test', 'reload', 'restart'}:
             raise OperationError('Unknown operation')
         with self.lock():

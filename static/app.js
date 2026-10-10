@@ -78,12 +78,14 @@ function showResult(selector, message, success = false) {
   element.classList.toggle('success', success);
 }
 
-function confirmAction(title, description, danger = false) {
+function confirmAction(title, description, danger = false, acceptText = 'Подтвердить', cancelText = 'Отмена') {
   return new Promise((resolve) => {
     const dialog = query('#confirm-dialog');
     query('#confirm-title').textContent = title;
     query('#confirm-description').textContent = description;
     query('#confirm-accept').className = 'button ' + (danger ? 'danger' : 'primary');
+    query('#confirm-accept').textContent = acceptText;
+    query('#confirm-cancel').textContent = cancelText;
     const finish = (answer) => {
       dialog.close();
       dialog.oncancel = null;
@@ -169,9 +171,11 @@ function openCertificateDialog(item) {
 function hostTable(items) {
   if (!items.length) return `<div class="empty-state">${icon('folder-search')}<strong>Конфигурации не найдены</strong><span>Нет хостов, соответствующих выбранному фильтру.</span></div>`;
   const rows = items.map((item) => {
-    const status = item.maintenance ? 'Обслуживание' : item.enabled ? 'Включён' : 'Отключён';
+    const status = item.maintenance ? 'Обслуживание' : item.nonpayment ? 'Отключён: неоплата' : item.enabled ? 'Включён' : 'Отключён';
     const toggleLabel = item.maintenance ? 'Вернуть прокси' : item.enabled ? 'Отключить' : 'Включить';
     const toggleTitle = !item.toggleable ? 'Нестандартный include: изменение в nginx.conf' : item.maintenance ? 'Вернуть reverse-proxy' : item.enabled ? 'Перевести конфигурацию в обслуживание' : 'Включить конфигурацию';
+    const nonpaymentTitle = item.nonpayment ? 'Восстановить сайт после оплаты' : 'Отключить сайт из-за неоплаты';
+    const nonpaymentToggle = item.toggleable ? `<button class="toggle toggle-nonpayment" role="switch" aria-checked="${Boolean(item.nonpayment)}" aria-label="${item.nonpayment ? 'Восстановить после оплаты' : 'Отключить из-за неоплаты'} ${escapeHtml(item.name)}" data-action="nonpayment" title="${nonpaymentTitle}" ${item.enabled || item.nonpayment ? '' : 'disabled'}></button>` : '';
     const deleteButton = item.toggleable ? `<button class="icon-button danger" data-action="delete" aria-label="Удалить ${escapeHtml(item.name)}" title="Удалить конфигурацию из nginx">${icon('trash-2')}</button>` : '';
     const expiryDays = item.tls && Number.isInteger(item.certificate_days) ? item.certificate_days : null;
     const expiry = expiryDays === null ? '' : `<span class="certificate-expiry ${expiryDays < 0 ? 'expired' : expiryDays <= 14 ? 'warning' : ''}" title="${expiryDays < 0 ? 'Сертификат просрочен' : 'Осталось дней действия сертификата'}">${expiryDays < 0 ? `Просрочен ${Math.abs(expiryDays)} дн.` : expiryDays === 0 ? 'Истекает сегодня' : `${expiryDays} дн.`}</span>`;
@@ -193,7 +197,7 @@ function hostTable(items) {
     const trafficCell = `<div class="host-traffic" title="${trafficTitle}"><span aria-label="Скачано">↓ ${traffic ? trafficSize(traffic.downloaded_bytes) : '—'}</span><span aria-label="Отправлено">↑ ${traffic ? uploaded : '—'}</span></div>`;
     const href = hostHref(item);
     const openLink = href ? `<a class="host-open-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="Открыть хост" aria-label="Открыть ${escapeHtml(item.name)}">🔗</a>` : '';
-    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span>${openLink}${domainExpiry}<span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td>${trafficCell}</td><td><div class="protocol-cell">${protocol}${expiry}</div></td><td><span class="badge ${item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${toggleTitle}" ${item.toggleable ? '' : 'disabled'}></button><button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
+    return `<tr data-id="${escapeHtml(item.id)}"><td><div class="domain-cell"><span class="domain-icon ${item.kind}">${icon(item.kind === 'proxy' ? 'network' : 'globe-2')}</span><span><span class="domain-name">${escapeHtml(item.name)}</span>${openLink}${domainExpiry}<span class="domain-path" title="${escapeHtml(item.id)}">${escapeHtml(item.id)}${item.servers > 1 ? ` · ${item.servers} блоков server` : ''}</span></span></div></td><td class="target-cell" title="${escapeHtml(item.target)}">${escapeHtml(item.target)}</td><td>${trafficCell}</td><td><div class="protocol-cell">${protocol}${expiry}</div></td><td><span class="badge ${item.nonpayment ? 'warning' : item.enabled ? 'success' : 'neutral'}"><span class="status-dot ${item.nonpayment ? 'nonpayment-dot' : item.enabled ? '' : 'off'}"></span>${status}</span></td><td><div class="row-actions"><button class="toggle" role="switch" aria-checked="${item.enabled}" aria-label="${toggleLabel} ${escapeHtml(item.name)}" data-action="toggle" title="${item.nonpayment ? 'Используйте переключатель оплаты для восстановления' : toggleTitle}" ${item.toggleable && !item.nonpayment ? '' : 'disabled'}></button>${nonpaymentToggle}<button class="icon-button" data-action="edit" aria-label="Редактировать ${escapeHtml(item.name)}" title="Редактировать конфигурацию">${icon('square-pen')}</button><button class="icon-button" data-action="logs" aria-label="Журнал ${escapeHtml(item.name)}" title="Просмотреть журнал">${icon('scroll-text')}</button><button class="icon-button" data-action="reload" aria-label="Применить ${escapeHtml(item.name)}" title="Применить через reload nginx">${icon('rotate-cw')}</button>${deleteButton}</div></td></tr>`;
   }).join('');
   return `<div class="table-scroll"><table class="data-table"><thead><tr><th>ДОМЕН / КОНФИГУРАЦИЯ</th><th>НАЗНАЧЕНИЕ</th><th>ТРАФИК</th><th>ПРОТОКОЛ</th><th>СТАТУС</th><th>ДЕЙСТВИЯ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -501,6 +505,41 @@ async function refreshSessionTimeoutSettings() {
   query('#session-timeout-result').hidden = true;
 }
 
+function ensureNonpaymentContactSettings() {
+  if (query('#nonpayment-contact-edit')) return;
+  const section = document.createElement('section');
+  section.className = 'settings-section nonpayment-contact-section';
+  section.innerHTML = '<div class="section-heading"><h2>Отключение из-за неоплаты</h2><i data-lucide="receipt-text" class="text-amber"></i></div><p id="nonpayment-contact-preview" class="muted small"></p><div id="nonpayment-contact-result" class="operation-result" hidden></div><button class="button" type="button" id="nonpayment-contact-edit"><i data-lucide="file-pen"></i>Изменить текст</button>';
+  query('#view-settings .settings-layout').append(section);
+  const dialog = document.createElement('dialog');
+  dialog.id = 'nonpayment-contact-dialog';
+  dialog.className = 'modal';
+  dialog.innerHTML = '<div class="modal-heading"><h2>Текст для связи</h2><button class="icon-button" type="button" data-close="nonpayment-contact-dialog" title="Закрыть" aria-label="Закрыть"><i data-lucide="x"></i></button></div><form id="nonpayment-contact-form"><label>Сообщение на странице блокировки<textarea id="nonpayment-contact-input" name="contact_text" rows="4" maxlength="500" required></textarea></label><p class="muted small">HTML-теги на странице выводятся как обычный текст.</p><div id="nonpayment-contact-error" class="form-error" role="alert" hidden></div><div class="modal-footer"><button class="button" type="button" data-close="nonpayment-contact-dialog">Отмена</button><button class="button primary" type="submit"><i data-lucide="save"></i>Сохранить</button></div></form>';
+  document.body.append(dialog);
+  query('#nonpayment-contact-edit').addEventListener('click', () => {
+    query('#nonpayment-contact-input').value = query('#nonpayment-contact-preview').textContent;
+    query('#nonpayment-contact-error').hidden = true;
+    dialog.showModal();
+  });
+  query('#nonpayment-contact-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(event.submitter, async () => {
+      const result = await request('settings', {nonpayment_contact_text: query('#nonpayment-contact-input').value.trim()});
+      dialog.close();
+      showResult('#nonpayment-contact-result', result.message, true);
+      await refreshNonpaymentContactSettings();
+    }, '#nonpayment-contact-error');
+  });
+  icons();
+}
+
+async function refreshNonpaymentContactSettings() {
+  ensureNonpaymentContactSettings();
+  const result = await request('settings');
+  query('#nonpayment-contact-preview').textContent = result.nonpayment_contact_text;
+  query('#nonpayment-contact-result').hidden = true;
+}
+
 function ensurePanelTlsSettings() {
   if (query('#panel-tls-status')) return;
   const section = document.createElement('section');
@@ -734,8 +773,9 @@ async function route() {
       await refreshAccessLogSampleSettings();
       await refreshTrafficMaintenanceSettings();
       await refreshPanelTlsSettings();
+      await refreshNonpaymentContactSettings();
       const layout = query('#view-settings .settings-layout');
-      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.mattermost-webhook-section'), query('.domain-expiry-scheduler-section'), query('.access-log-sample-section'), query('.panel-tls-section'));
+      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.mattermost-webhook-section'), query('.domain-expiry-scheduler-section'), query('.access-log-sample-section'), query('.nonpayment-contact-section'), query('.panel-tls-section'));
     }
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }
@@ -838,14 +878,15 @@ document.addEventListener('click', async (event) => {
       return;
     }
     const toggle = button.dataset.action === 'toggle';
+    const nonpayment = button.dataset.action === 'nonpayment';
     const deleting = button.dataset.action === 'delete';
     const enteringMaintenance = toggle && item.enabled && item.kind === 'proxy';
     const leavingMaintenance = toggle && item.maintenance;
-    const title = deleting ? `Удалить ${item.name} из nginx?` : toggle ? `${leavingMaintenance ? 'Вернуть прокси' : item.enabled ? 'Отключить' : 'Включить'} ${item.name}?` : `Применить ${item.name}?`;
-    const description = deleting ? `Файл ${item.id}${item.servers > 1 ? ` со всеми ${item.servers} блоками server` : ''} и его ссылки sites-enabled будут удалены из nginx, хост исчезнет из панели.${item.enabled ? ' Хост активен: сайты перестанут обслуживаться после reload.' : ''} Резервная копия останется в state-каталоге. После проверки конфигурации будет выполнен reload.` : `Сервер: ${serverLabel()}. Файл: ${item.id}. ${item.servers > 1 ? `Затронуты все ${item.servers} блоков server в файле. ` : ''}После проверки конфигурации будет выполнен reload всего nginx.${enteringMaintenance ? ' Reverse-proxy будет переведён в обслуживание с показом maitenance.html.' : toggle && item.enabled ? ' Хост перестанет обслуживаться.' : ''}`;
-    if (!await confirmAction(title, description, deleting || toggle && item.enabled && !enteringMaintenance)) return;
-    await request('hosts', {action: deleting ? 'delete' : toggle ? 'toggle' : 'reload', id: item.id, enabled: !item.enabled, revision: item.revision});
-    toast(deleting ? 'Хост удалён из панели и nginx.' : toggle ? enteringMaintenance ? 'Reverse-proxy переведён в обслуживание.' : leavingMaintenance ? 'Reverse-proxy восстановлен.' : 'Состояние конфигурации изменено.' : 'Конфигурация применена через reload.');
+    const title = nonpayment ? `${item.nonpayment ? 'Восстановить' : 'Отключить'} ${item.name} ${item.nonpayment ? 'после оплаты' : 'из-за неоплаты'}?` : deleting ? `Удалить ${item.name} из nginx?` : toggle ? `${leavingMaintenance ? 'Вернуть прокси' : item.enabled ? 'Отключить' : 'Включить'} ${item.name}?` : `Применить ${item.name}?`;
+    const description = nonpayment ? item.nonpayment ? `Доступ к ${item.name} будет восстановлен. Конфигурация вернётся из резервной копии.` : `Сайт ${item.name} будет отключён и покажет специальную страницу о неоплате. Обычная заглушка maitenance.html не изменится.${item.servers > 1 ? ` В файле ${item.id} содержится ${item.servers} блока server; действие затронет весь файл.` : ''}` : deleting ? `Файл ${item.id}${item.servers > 1 ? ` со всеми ${item.servers} блоками server` : ''} и его ссылки sites-enabled будут удалены из nginx, хост исчезнет из панели.${item.enabled ? ' Хост активен: сайты перестанут обслуживаться после reload.' : ''} Резервная копия останется в state-каталоге. После проверки конфигурации будет выполнен reload.` : `Сервер: ${serverLabel()}. Файл: ${item.id}. ${item.servers > 1 ? `Затронуты все ${item.servers} блоков server в файле. ` : ''}После проверки конфигурации будет выполнен reload всего nginx.${enteringMaintenance ? ' Reverse-proxy будет переведён в обслуживание с показом maitenance.html.' : toggle && item.enabled ? ' Хост перестанет обслуживаться.' : ''}`;
+    if (!await confirmAction(title, description, nonpayment || deleting || toggle && item.enabled && !enteringMaintenance, nonpayment ? item.nonpayment ? 'Восстановить' : 'Отключить' : 'Подтвердить', nonpayment ? 'Отменить' : 'Отмена')) return;
+    await request('hosts', {action: deleting ? 'delete' : nonpayment ? 'nonpayment' : toggle ? 'toggle' : 'reload', id: item.id, enabled: nonpayment ? !item.nonpayment : !item.enabled, revision: item.revision});
+    toast(nonpayment ? item.nonpayment ? 'Доступ к сайту восстановлен.' : 'Сайт отключён из-за неоплаты.' : deleting ? 'Хост удалён из панели и nginx.' : toggle ? enteringMaintenance ? 'Reverse-proxy переведён в обслуживание.' : leavingMaintenance ? 'Reverse-proxy восстановлен.' : 'Состояние конфигурации изменено.' : 'Конфигурация применена через reload.');
     await refreshHosts();
   });
 });

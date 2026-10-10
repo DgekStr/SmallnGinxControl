@@ -61,7 +61,7 @@ test('about page is the bottom service menu entry and explains license and billi
   await expect(page.locator('.sidebar-bottom [data-view="about"]')).toBeVisible();
   await page.locator('.sidebar-bottom [data-view="about"]').click();
   await expect(page.locator('#page-title')).toHaveText('О программе');
-  await expect(page.locator('#view-about')).toContainText('1.0.3');
+  await expect(page.locator('#view-about')).toContainText('1.0.4');
   await expect(page.locator('#view-about')).toContainText('распространяется бесплатно');
   await expect(page.locator('#view-about')).toContainText('клиентский биллинг');
   await expect(page.locator('#view-about a[href="https://github.com/DgekStr/SmallnGinxControl"]')).toBeVisible();
@@ -82,12 +82,29 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   const row = page.locator('#hosts-table tbody tr').filter({hasText: 'e2e.internal'});
   await expect(row).toContainText('Включён');
   await expect(row.getByRole('button', {name: 'Удалить e2e.internal'})).toBeVisible();
-  await row.getByRole('switch').click();
+  await row.locator('[data-action="toggle"]').click();
   await expect(page.locator('#confirm-description')).toContainText('maitenance.html');
   await page.locator('#confirm-accept').click();
   await expect(row).toContainText('Обслуживание');
   await page.screenshot({path: 'test-results/proxies-maintenance.png', fullPage: true, animations: 'disabled'});
-  await row.getByRole('switch').click();
+  await row.locator('[data-action="toggle"]').click();
+  await page.locator('#confirm-accept').click();
+  await expect(row).toContainText('Включён');
+  await row.locator('[data-action="nonpayment"]').click();
+  await expect(page.locator('#confirm-accept')).toHaveText('Отключить');
+  await expect(page.locator('#confirm-cancel')).toHaveText('Отменить');
+  await expect(page.locator('#confirm-description')).toContainText('специальную страницу о неоплате');
+  await page.locator('#confirm-cancel').click();
+  await expect(row).toContainText('Включён');
+  await row.locator('[data-action="nonpayment"]').click();
+  await page.locator('#confirm-accept').click();
+  await expect(row).toContainText('Отключён: неоплата');
+  await row.locator('[data-action="edit"]').click();
+  await expect(page.locator('#host-config')).toHaveValue(/отключён по причине неоплаты/);
+  await expect(page.locator('#host-config')).toHaveValue(/Свяжитесь с администратором хостинга/);
+  await page.locator('#editor-dialog .modal-heading [data-close="editor-dialog"]').click();
+  await row.locator('[data-action="nonpayment"]').click();
+  await expect(page.locator('#confirm-accept')).toHaveText('Восстановить');
   await page.locator('#confirm-accept').click();
   await expect(row).toContainText('Включён');
   await row.locator('[data-action="edit"]').click();
@@ -117,6 +134,20 @@ test('proxy creation, toggles, config validation and logs', async ({page}) => {
   await expect(page.locator('#confirm-description')).toContainText('Резервная копия');
   await page.locator('#confirm-accept').click();
   await expect(row).toHaveCount(0);
+});
+
+test('nonpayment contact text can be edited from a settings modal', async ({page}) => {
+  await login(page);
+  await page.locator('[data-view="settings"]').click();
+  await expect(page.locator('#nonpayment-contact-preview')).toHaveText('Свяжитесь с администратором хостинга');
+  await page.locator('#nonpayment-contact-edit').click();
+  await page.locator('#nonpayment-contact-input').fill('Свяжитесь с администратором');
+  await page.locator('#nonpayment-contact-form button[type="submit"]').click();
+  await expect(page.locator('#nonpayment-contact-preview')).toHaveText('Свяжитесь с администратором');
+  await page.locator('#nonpayment-contact-edit').click();
+  await page.locator('#nonpayment-contact-input').fill('Свяжитесь с администратором хостинга');
+  await page.locator('#nonpayment-contact-form button[type="submit"]').click();
+  await expect(page.locator('#nonpayment-contact-preview')).toHaveText('Свяжитесь с администратором хостинга');
 });
 
 test('certificate expiry is shown only for HTTPS hosts', async ({page}) => {
@@ -295,7 +326,7 @@ test('server profiles isolate hosts, config, logs and tab selection', async ({pa
   await expect(page.locator('#overview-hosts')).not.toContainText('focuslens.dev');
   await page.locator('[data-view="hosts"]').click();
   const host = page.locator('#hosts-table tbody tr').filter({hasText: 'welcome.demo'});
-  await host.getByRole('switch').click();
+  await host.locator('[data-action="toggle"]').click();
   await expect(page.locator('#confirm-description')).toContainText('192.0.2.16');
   await page.locator('#confirm-accept').click();
   await expect(host).toContainText('Отключён');
@@ -470,8 +501,8 @@ test('switching server clears previous SSD usage while new metrics load', async 
 test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
-  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(8);
-  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Проверка доменов', 'TOP-5 по трафику', 'HTTPS панели']);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(9);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Проверка доменов', 'TOP-5 по трафику', 'Отключение из-за неоплаты', 'HTTPS панели']);
   await expect(page.locator('#panel-tls-status')).toHaveText('Только production');
   await expect(page.locator('#panel-tls-renew')).toBeDisabled();
   await expect(page.locator('#panel-tls-download')).toBeDisabled();
