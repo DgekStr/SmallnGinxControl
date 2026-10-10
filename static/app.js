@@ -23,7 +23,10 @@ const titles = {
   about: ['О программе', 'SMALLNGINXCONTROL / ABOUT', 'О программе'],
 };
 
-function icons() { lucide.createIcons(); }
+function icons() {
+  const lucideApi = globalThis.lucide;
+  if (typeof lucideApi?.createIcons === 'function') lucideApi.createIcons();
+}
 
 async function request(resource, data, parameters = {}) {
   const scoped = !['servers', 'password', 'settings', 'two-factor', 'panel-tls', 'panel-tls-download'].includes(resource);

@@ -100,6 +100,7 @@ npm run test:e2e
 ## Документы
 
 - [Развёртывание и обновление](deployment.md)
+- [Release v1.0.8](release-v1.0.8.md)
 - [Release v1.0.7](release-v1.0.7.md)
 - [Release v1.0.6](release-v1.0.6.md)
 - [Release v1.0.5](release-v1.0.5.md)

@@ -1,4 +1,4 @@
-lucide.createIcons();
+if (typeof globalThis.lucide?.createIcons === 'function') globalThis.lucide.createIcons();
 const revealPassword = document.querySelector('#reveal-password');
 if (revealPassword) revealPassword.addEventListener('click', (event) => {
   const input = document.querySelector('[name="password"]');

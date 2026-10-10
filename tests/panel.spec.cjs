@@ -56,12 +56,28 @@ test('overview renders assets, metrics and responsive layouts', async ({page}) =
   expect(errors).toEqual([]);
 });
 
+test('panel startup remains usable when the Lucide asset is unavailable', async ({page}) => {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.stack || error.message));
+  await page.route('**/static/vendor/lucide.js**', (route) => route.abort());
+  await page.goto('/');
+  await page.locator('#reveal-password').click();
+  await expect(page.locator('[name="password"]')).toHaveAttribute('type', 'text');
+  await login(page);
+  await expect(page.locator('#overview-hosts tbody tr')).toHaveCount(6);
+  await page.locator('[data-view="servers"]').click();
+  await expect(page.locator('#servers-table tbody tr').first()).toBeVisible();
+  await expect(page.locator('#server-select')).toBeEnabled();
+  await expect(page.locator('#server-select option').first()).not.toHaveValue('');
+  expect(errors).toEqual([]);
+});
+
 test('about page is the bottom service menu entry and explains license and billing', async ({page}) => {
   await login(page);
   await expect(page.locator('.sidebar-bottom [data-view="about"]')).toBeVisible();
   await page.locator('.sidebar-bottom [data-view="about"]').click();
   await expect(page.locator('#page-title')).toHaveText('О программе');
-  await expect(page.locator('#view-about')).toContainText('1.0.7');
+  await expect(page.locator('#view-about')).toContainText('1.0.8');
   await expect(page.locator('#view-about')).toContainText('распространяется бесплатно');
   await expect(page.locator('#view-about')).toContainText('клиентский биллинг');
   await expect(page.locator('#view-about a[href="https://github.com/DgekStr/SmallnGinxControl"]')).toBeVisible();

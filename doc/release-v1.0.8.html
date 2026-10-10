@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>SmallnGinxControl v1.0.8</title>
+  <style>
+    @font-face{font-family:Manrope;src:url('../static/vendor/manrope-latin.woff2') format('woff2');font-weight:200 800;font-display:swap}
+    @font-face{font-family:Manrope;src:url('../static/vendor/manrope-cyrillic.woff2') format('woff2');font-weight:200 800;font-display:swap;unicode-range:U+0400-04FF}
+    :root{font-family:Manrope,'Segoe UI',sans-serif;color:#172521;background:#f4f6f2;--muted:#64746f;--line:#d9e0da;--green:#176c54;--lime:#d8ef9b}
+    *{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#f6f7f1,#edf2ed 58%,#f6f4ef);font-size:15px;line-height:1.65}header,main,footer{width:min(980px,calc(100% - 48px));margin:auto}header{padding:25px 0;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}.brand{font-weight:800}.tag{font-size:12px;font-weight:700;color:var(--green);border:1px solid #afcbbd;padding:5px 9px;border-radius:3px}main{padding:34px 0 60px}.hero{padding:25px 0 37px}.eyebrow{text-transform:uppercase;color:var(--green);font-size:11px;font-weight:800}.hero h1{font-size:clamp(34px,5vw,56px);line-height:1.05;margin:12px 0 16px}.hero p{font-size:17px;color:#455851;max-width:720px}.release-mark{display:inline-block;background:#152521;color:#eef5ed;padding:16px 22px;border-left:5px solid var(--lime)}.release-mark strong{display:block;font-size:25px}.section{padding:27px 0;border-top:1px solid var(--line)}.section h2{font-size:22px;line-height:1.2;margin:0 0 14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.item{background:#fff;padding:18px;border:1px solid var(--line);border-top:3px solid var(--green)}.item h3{margin:0 0 7px;font-size:16px}.item p{margin:0;color:var(--muted);font-size:13px}a{color:var(--green);text-underline-offset:3px}footer{padding:20px 0 32px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:18px}@media(max-width:650px){header,main,footer{width:calc(100% - 36px)}.grid{grid-template-columns:1fr}.hero h1{font-size:38px}footer{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <header><a class="brand" href="../README.md">SmallnGinxControl</a><span class="tag">RELEASE v1.0.8</span></header>
+  <main>
+    <section class="hero"><div class="eyebrow">Nginx operations · self-hosted</div><h1>Панель открывается даже без библиотеки иконок.</h1><p>Недоступность Lucide больше не прерывает выполнение login.js и инициализацию overview/server picker.</p><div class="release-mark"><strong>v1.0.8</strong><span>Hotfix · 11 октября 2026</span></div></section>
+    <section class="section"><h2>Что изменилось</h2><div class="grid">
+      <article class="item"><h3>Безопасная инициализация</h3><p>Вызов createIcons проверяет наличие global API и не генерирует ReferenceError.</p></article>
+      <article class="item"><h3>Рабочий вход</h3><p>Обработчик показа пароля регистрируется даже при сбое загрузки Lucide.</p></article>
+      <article class="item"><h3>Рабочая панель</h3><p>Overview и выбор серверов продолжают работать; декоративные иконки могут быть недоступны.</p></article>
+      <article class="item"><h3>Обновление кеша</h3><p>Для Lucide, app.js и login.js выставлены новые cache-bust параметры.</p></article>
+    </div></section>
+    <section class="section"><h2>Обновление</h2><p>Новый сервер устанавливает release <code>v1.0.8</code>. Для существующего сервера используйте <a href="deployment.md">инструкцию обновления</a>.</p></section>
+  </main>
+  <footer><span>SmallnGinxControl · v1.0.8</span><span>Copyright © 2026 DgekStr · MIT License</span></footer>
+</body>
+</html>
