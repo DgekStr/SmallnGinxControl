@@ -778,7 +778,7 @@ async function route() {
       await refreshPanelTlsSettings();
       await refreshNonpaymentContactSettings();
       const layout = query('#view-settings .settings-layout');
-      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.mattermost-webhook-section'), query('.domain-expiry-scheduler-section'), query('.access-log-sample-section'), query('.nonpayment-contact-section'), query('.panel-tls-section'));
+      layout.append(layout.querySelector('.traffic-control-section'), query('.two-factor-settings'), query('.session-timeout-section'), query('.log-retention-section'), query('.mattermost-webhook-section'), query('.nonpayment-contact-section'), query('.domain-expiry-scheduler-section'), query('.access-log-sample-section'), query('.panel-tls-section'));
     }
   } catch (error) { if (!error.stale) toast(error.message, true); }
 }

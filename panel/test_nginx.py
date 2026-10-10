@@ -193,10 +193,17 @@ class NginxTests(SimpleTestCase):
             main_config = root / 'nginx.conf'
             main_config.write_text(
                 f'worker_processes 1;\npid {root / "nginx.pid"};\nerror_log {root / "error.log"};\n'
-                f'events {{ worker_connections 64; }}\nhttp {{ include {server_config}; }}\n',
+                'events { worker_connections 64; }\nhttp {\n'
+                '    access_log off;\n'
+                f'    client_body_temp_path {root / "client_temp"};\n'
+                f'    proxy_temp_path {root / "proxy_temp"};\n'
+                f'    fastcgi_temp_path {root / "fastcgi_temp"};\n'
+                f'    uwsgi_temp_path {root / "uwsgi_temp"};\n'
+                f'    scgi_temp_path {root / "scgi_temp"};\n'
+                f'    include {server_config};\n}}\n',
                 encoding='utf-8',
             )
-            checked = subprocess.run([nginx_bin, '-t', '-c', str(main_config)], capture_output=True, text=True)
+            checked = subprocess.run([nginx_bin, '-p', root.as_posix() + '/', '-t', '-c', str(main_config)], capture_output=True, text=True)
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
             process = subprocess.Popen(
                 [nginx_bin, '-p', root.as_posix() + '/', '-c', str(main_config), '-g', 'daemon off;'],

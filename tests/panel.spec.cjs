@@ -518,7 +518,7 @@ test('password change persists across logout and login', async ({page}) => {
   await login(page);
   await page.locator('[data-view="settings"]').click();
   await expect(page.locator('#view-settings .settings-layout > .settings-section')).toHaveCount(9);
-  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Проверка доменов', 'TOP-5 по трафику', 'Сообщение при неоплате', 'HTTPS панели']);
+  await expect(page.locator('#view-settings .settings-layout > .settings-section h2')).toHaveText(['Перезапуск nginx', 'Двухфакторная защита', 'Сессия администратора', 'Хранение логов', 'Уведомления Mattermost', 'Сообщение при неоплате', 'Проверка доменов', 'TOP-5 по трафику', 'HTTPS панели']);
   await expect(page.locator('#panel-tls-status')).toHaveText('Только production');
   await expect(page.locator('#panel-tls-renew')).toBeDisabled();
   await expect(page.locator('#panel-tls-download')).toBeDisabled();

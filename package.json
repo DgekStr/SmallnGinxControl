@@ -1,7 +1,7 @@
 {
   "name": "smallnginxcontrol-ui-assets",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.9",
   "scripts": {
     "assets": "node tools/sync-assets.mjs",
     "test:e2e": "playwright test"
